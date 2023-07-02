@@ -1,0 +1,4 @@
+/target
+/data/secrets
+tags
+Cargo.lock
