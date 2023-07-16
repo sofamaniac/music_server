@@ -1,0 +1,37 @@
+The app stores the song that were fetched at some points locally,
+and everything is store in a database.
+
+Database structure:
+Tables:
+- Playlists
+- Songs
+
+Playlists:
+- id
+- name
+- source / origin (youtube, spotify, ...)
+- description
+- tags
+- songs_id: list of songs' id that belong to the playlist
+
+Songs:
+- id (different from the id that can be associated to it by the origin)
+- name
+- authors (list of strings)
+- tags (list of strings)
+- genre (list of strings)
+- location (url if not downloaded, file location otherwise ?)
+- origin
+- playlists (list of playlists it appears in)
+- album (can be empty maybe)
+
+Thus the request are much simpler, for example to get all the playlists originating from youtube,
+the query might look something like :
+get playlists source=youtube
+
+And the program is in the end just a front end for a database, with a few useful feature,
+as for example downloading automatically the song requested.
+
+A few problems arise for example what to do when a song was removed or added from a playlist directly on youtube
+by the user ?
+Likewise how to properly add songs to a youtube playlist if they were added from a query ?
