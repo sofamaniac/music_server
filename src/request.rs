@@ -1,57 +1,99 @@
-use serde::{Serialize, Deserialize};
-use tokio::sync::mpsc::Sender;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{Sender, error::SendError};
+use std::fmt;
 
-#[derive(Serialize, Deserialize)]
-#[derive(Clone)]
+use crate::source::{Playlist, Song, SourceError};
+
+pub type RequestResult<T> = Result<T, RequestError>;
+
+#[derive(Debug)]
+pub enum RequestError {
+    SendErr(SendError<Answer>),
+    JsonErr(serde_json::error::Error)
+}
+
+impl fmt::Display for RequestError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub enum RequestType {
-    GetAll(Obj),
-    Message(String),
+    GetAll(ObjRequest),
     Error(String),
     Set,
     Add,
     Remove,
-    Answer(String),
     Get(Attr),
+    Download(ObjRequest),
+    Message(String),
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ObjRequest {
+    PlaylistList,
+    Playlist(String),
+    Song,
+    Client(String),
+    ClientList,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum AnswerType {
+    PlaylistList(Vec<Playlist>),
+    Playlist(Playlist),
+    Songs(Vec<Song>),
+    Song(Song),
+    Client(String),
+    Message(String),
+    Error(ErrorType),
+}
+
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ErrorType {
+    SourceError(SourceError)
+}
+
+#[derive(Serialize, Deserialize, Clone)]
 pub enum Attr {
     Name,
     Url,
     Id,
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Clone)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Request {
     pub client: String,
-    pub ty: RequestType
+    pub ty: RequestType,
 }
 
-impl Request {
-    pub fn new(client: String, ty: RequestType) -> Self {
-        Request { client, ty }
+#[derive(Serialize, Deserialize, Clone)]
+pub struct Answer {
+    pub client: String,
+    pub data: AnswerType,
+}
+
+impl Answer {
+    pub fn new(client: String, data: AnswerType) -> Self {
+        Answer { client, data }
     }
 }
 
-#[derive(Serialize, Deserialize)]
-#[derive(Clone)]
-pub enum Obj {
-    PlaylistList,
-    Playlist(String),
-    Song,
-    Client,
-}
-
-pub async fn send_request(channel: Sender<String>, request: Request) -> Result<(), tokio::sync::mpsc::error::SendError<String>> {
-    let request = serde_json::to_string(&request).unwrap();
+pub async fn send_request(
+    channel: Sender<Answer>,
+    request: Answer,
+) -> RequestResult<()> {
     match channel.send(request).await {
         Ok(_) => Ok(()),
-        Err(err) => Err(err),
+        Err(err) => Err(RequestError::SendErr(err)),
     }
 }
 
-pub async fn handle_request(json: String) -> Result<Request, serde_json::Error> {
-    serde_json::from_str(&json)
+pub async fn handle_request(json: String) -> RequestResult<Request> {
+    match serde_json::from_str(&json) {
+        Ok(val) => Ok(val),
+        Err(err) => Err(RequestError::JsonErr(err))
+    }
 }

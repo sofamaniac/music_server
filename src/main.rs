@@ -1,11 +1,12 @@
+mod config;
 mod db;
 mod request;
 mod source;
-use std::{io, vec};
+mod utils;
+use std::io;
 
-pub use crate::source::youtube::Client;
-use request::{handle_request, Request};
-use source::Source;
+use request::{handle_request, Request, Answer};
+use source::{spotify, youtube, Source};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Builder;
@@ -40,7 +41,11 @@ fn start_server() {
         .unwrap();
 
     acceptor_runtime.block_on(async {
-        let listener = TcpListener::bind("127.0.0.1:8080").await.unwrap();
+        let config = config::get_config();
+        let port = config.port;
+        let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+            .await
+            .unwrap();
 
         loop {
             let (socket, _) = listener.accept().await.unwrap();
@@ -63,11 +68,15 @@ async fn stream_read(
             // socket closed
             Ok(n) if n == 0 => break,
             Ok(n) => {
-                let message = std::str::from_utf8(&buf[0..n]).expect("some utf8 issue");
+                let message = match std::str::from_utf8(&buf[0..n]) {
+                    Ok(mes) => mes,
+                    Err(_) => continue, // TODO inform client
+                };
                 let request: Request = match handle_request(message.to_owned()).await {
                     Ok(req) => req,
                     Err(e) => {
                         println!("Error while handling request : {}", e);
+                        // TODO inform client
                         continue;
                     }
                 };
@@ -88,39 +97,44 @@ async fn stream_read(
 
 async fn stream_write(
     stream_tx: OwnedWriteHalf,
-    mut mpsc_rx: mpsc::Receiver<String>,
+    mut mpsc_rx: mpsc::Receiver<Answer>,
 ) -> Result<(), std::io::Error> {
-    let clients = vec!["Youtube"];
-    stream_tx.writable().await?;
-    stream_tx.try_write(serde_json::to_string(&clients).unwrap().as_bytes())?;
     loop {
         match mpsc_rx.recv().await {
             None => continue,
             Some(message) => {
-                println!("{}", message);
+                let json = serde_json::to_string(&message).unwrap();
                 stream_tx.writable().await?;
-                stream_tx.try_write(message.as_bytes())?;
+                stream_tx.try_write(json.as_bytes())?;
             }
         }
     }
 }
-async fn client_spawning(broad_tx: broadcast::Sender<Request>, mpsc_tx: mpsc::Sender<String>) {
+async fn client_spawning(broad_tx: broadcast::Sender<Request>, mpsc_tx: mpsc::Sender<Answer>) {
     // We assume that the API are always up
     if online::tokio::check(None).await.is_ok() {
         let mut youtube_client =
-            Client::new("Youtube".to_string(), broad_tx.subscribe(), mpsc_tx.clone())
+            youtube::Client::new("Youtube", broad_tx.subscribe(), mpsc_tx.clone())
                 .await
                 .unwrap();
-        println!("Client created");
-        //youtube_client.init().await;
-        youtube_client.listen().await;
+        let mut spotify_client =
+            spotify::Client::new("Spotify", broad_tx.subscribe(), mpsc_tx.clone()).await;
+        tokio::spawn(async move {
+            spotify_client.authenticate().await;
+            spotify_client.fetch_all_playlists().await;
+            spotify_client.listen().await;
+        });
+        tokio::spawn(async move {
+            youtube_client.init().await;
+            youtube_client.listen().await;
+        });
     }
 }
 
 async fn stream_handler(stream: TcpStream) -> Result<(), std::io::Error> {
     let (rx, tx) = stream.into_split();
     let (broad_tx, _) = broadcast::channel::<Request>(16);
-    let (mpsc_tx, mpsc_rx) = mpsc::channel(100);
+    let (mpsc_tx, mpsc_rx) = mpsc::channel::<Answer>(100);
     tokio::spawn(stream_read(rx, broad_tx.clone()));
     tokio::spawn(stream_write(tx, mpsc_rx));
     tokio::spawn(client_spawning(broad_tx, mpsc_tx));
@@ -128,6 +142,7 @@ async fn stream_handler(stream: TcpStream) -> Result<(), std::io::Error> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    db::init().expect("Failed to initialize db");
     start_server();
     Ok(())
 }
