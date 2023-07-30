@@ -1,8 +1,8 @@
 #![warn(clippy::unwrap_used)]
 extern crate google_youtube3 as youtube3;
-use crate::request::{send_request, Answer, AnswerType, Request};
-use crate::source::Song as YoutubeSong;
-pub use crate::source::{Playlist, Song, Source, SourceError, SourceResult};
+use music_server::request::{send_request, Answer, AnswerType, Request};
+use super::Song as YoutubeSong;
+use super::{Playlist, Song, Source, SourceError, SourceResult};
 use crate::utils::parse_duration;
 use crate::{db, utils};
 use async_trait::async_trait;
@@ -375,6 +375,7 @@ impl Source for Client {
                 Ok(msg) => self.handle_request(msg).await,
                 Err(e) => {
                     eprintln!("failed to read from socket; err = {:?}", e);
+                    break;
                 } // TODO handle socket closing
             };
         }
