@@ -12,7 +12,7 @@ impl fmt::Display for SourceError {
     }
 }
 
-#[derive(Serialize, Clone, Debug, Deserialize)]
+#[derive(Serialize, Clone, Debug, Deserialize, Default)]
 pub struct Song {
     pub title: String,
     pub artits: Vec<String>,

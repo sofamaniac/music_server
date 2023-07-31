@@ -35,7 +35,9 @@ pub enum Event {
     Download,
     Auto,
     Next,
-    Prev
+    Prev,
+    SeekForward,
+    SeekBackward,
 }
 
 pub enum Direction {
@@ -47,6 +49,7 @@ pub enum Direction {
     DownPanel,
 }
 
+#[derive(Debug)]
 struct Route {
     source: Option<usize>,
     playlist: Option<usize>,
@@ -293,6 +296,8 @@ impl App {
             Event::Prev => self.player.prev(),
             Event::Next => self.player.next(),
             Event::Auto => self.auto(),
+            Event::SeekForward => self.player.seek(5),
+            Event::SeekBackward => self.player.seek(-5),
             _ => (),
         }
         self.move_current_panel(0);
@@ -388,6 +393,35 @@ impl App {
         }
     }
 
+    pub fn get_current_song(&self) -> Song {
+        let route = self.get_current_route();
+        if let Some(song) = route.song {
+            let playlist = route.playlist.unwrap();
+            let source = route.source.unwrap();
+            let song = &self.sources[source].playlist[playlist].songs[song];
+            song.clone()
+        } else {
+            Default::default()
+        }
+    }
+
+    pub fn get_playing_song_info(&self) -> Song {
+        let state = self.player.get_state();
+        let parts: Vec<&str> = state.path.split('/').collect();
+        if parts.len() < 3 {
+            return Default::default()
+        }
+        let playlist = parts[parts.len() -2];
+        let source = parts[parts.len() -3];
+        if let Some(source) = self.sources.iter().find(|s| s.name == source) {
+            if let Some(playlist) = source.playlist.iter().find(|p| p.name == playlist) {
+                if let Some(song) = playlist.songs.iter().find(|s| s.title == state.title) {
+                    song.clone()
+                } else { Default::default()}
+            } else { Default::default() }
+        } else { Default::default() }
+    }
+
     fn auto(&mut self) {
         let route = self.get_current_route();
         if let Some(p) = route.playlist {
@@ -397,6 +431,26 @@ impl App {
             // to convert from Vec<String> to Vec<&str>
             let songs: Vec<&str> = playlist.iter().map(|s| String::as_ref(&s.url)).collect();
             self.player.set_auto(&songs);
+        }
+    }
+
+    pub fn is_auto(&self) -> bool {
+        self.player.is_in_playlist()
+    }
+
+    pub fn set_auto_val(&mut self, val: bool)  {
+        if val == self.player.is_in_playlist() {
+            return;
+        } else {
+            self.auto()
+        }
+    }
+
+    pub fn set_pause_val(&mut self, val: bool)  {
+        if val == self.player.paused() {
+            return
+        } else {
+            self.player.playpause()
         }
     }
 }

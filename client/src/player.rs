@@ -5,13 +5,15 @@ pub struct Player {
     player: Mpv,
     shuffled: bool,
     in_playlist: bool,
+    stopped: bool,
 }
 
 pub struct State {
-    pub duration: i64,
-    pub time_pos: i64,
+    pub duration: i64, // in secs
+    pub time_pos: i64, // in secs
     pub volume: i64,
     pub title: String,
+    pub path: String,
 }
 
 impl Player {
@@ -23,6 +25,7 @@ impl Player {
             player,
             shuffled: false,
             in_playlist: false,
+            stopped: true,
         }
     }
 
@@ -31,17 +34,22 @@ impl Player {
         let time_pos = self.player.get_property("time-pos").unwrap_or_default();
         let volume = self.player.get_property("volume").unwrap_or_default();
         let title = self.player.get_property("media-title").unwrap_or_default();
+        let path = self.player.get_property("path").unwrap_or_default();
         State {
             duration,
             time_pos,
             volume,
             title,
+            path
         }
     }
 
+    pub fn paused(&self) -> bool {
+        self.player.get_property("pause").unwrap()
+    }
+
     pub fn playpause(&mut self) {
-        let pause: bool = self.player.get_property("pause").unwrap();
-        if pause {
+        if self.paused() {
             self.player.unpause();
         } else {
             self.player.pause();
@@ -51,7 +59,7 @@ impl Player {
     pub fn play(&mut self, url: &str) {
         // It is necessary to surround the url with quotes to avoid errors
         match self.player.command("loadfile", &[&format!("\"{}\"", url)]) {
-            Ok(_) => (),
+            Ok(_) => self.stopped = false,
             Err(e) => eprintln!("error {:?}", e),
         };
     }
@@ -88,6 +96,7 @@ impl Player {
                 .map(|s| (s, FileState::AppendPlay, None))
                 .collect();
             self.player.playlist_load_files(&files).unwrap();
+            self.stopped = false;
         }
         self.in_playlist = !self.in_playlist;
     }
@@ -106,5 +115,18 @@ impl Player {
 
     pub fn is_in_playlist(&self) -> bool {
         self.in_playlist
+    }
+
+    pub fn stop(&mut self) {
+        self.player.command("stop", &[]).unwrap();
+        self.stopped = true;
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.stopped
+    }
+
+    pub fn seek(&mut self, dt: i64) {
+        self.player.seek_forward(dt as f64).unwrap();
     }
 }

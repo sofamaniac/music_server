@@ -23,6 +23,7 @@ use tui::{
 };
 
 mod app;
+mod dbus;
 mod player;
 use app::App;
 
@@ -90,6 +91,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let app = Arc::new(Mutex::new(App::new(tx)));
     let app_clone = Arc::clone(&app);
     tokio::spawn(async move { listen(&app_clone, &mut rx).await });
+    let app_clone = Arc::clone(&app);
+    tokio::spawn(async move { dbus::start_dbus(app_clone).await.unwrap() });
     start_ui(&app).await;
     Ok(())
 }
@@ -141,6 +144,8 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &Arc<Mutex<App>>) 
                     KeyCode::Char('>') => app.handle_event(app::Event::Next).await,
                     KeyCode::Char('a') => app.handle_event(app::Event::Auto).await,
                     KeyCode::Char('y') => app.handle_event(app::Event::Shuffle).await,
+                    KeyCode::Right => app.handle_event(app::Event::SeekForward).await,
+                    KeyCode::Left => app.handle_event(app::Event::SeekBackward).await,
                     _ => (),
                 }
             }
@@ -221,6 +226,7 @@ fn ui<B: Backend>(
     } else {
         (player_state.time_pos * 100) / player_state.duration
     };
+    let percentage = std::cmp::min(percentage, 100);
     let player_info = format!(
         "{} - {}/{}",
         player_state.title,
@@ -238,11 +244,11 @@ fn ui<B: Backend>(
 fn duration_to_string(dur: Duration) -> String {
     let secs = dur.as_secs();
     let (minutes, secs) = (secs / 60, secs % 60);
-    let (hours, minutes) = (minutes / 60, minutes%60);
-    let min_sec_str = format!("{:0width$}:{:0width$}", minutes, secs, width=2);
+    let (hours, minutes) = (minutes / 60, minutes % 60);
+    let min_sec_str = format!("{:0width$}:{:0width$}", minutes, secs, width = 2);
     if hours == 0 {
         min_sec_str
     } else {
-        format!("{:0width$}:{}", hours, min_sec_str, width=2)
+        format!("{:0width$}:{}", hours, min_sec_str, width = 2)
     }
 }
