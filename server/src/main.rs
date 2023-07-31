@@ -88,6 +88,7 @@ async fn stream_read(
                 continue;
             }
         };
+        println!("{:?}", request);
         broad_tx.send(request);
     }
 }
@@ -98,7 +99,7 @@ async fn stream_write(
 ) -> Result<(), std::io::Error> {
     loop {
         match mpsc_rx.recv().await {
-            None => continue,
+            None => break Ok(()),
             Some(message) => {
                 let json = serde_json::to_string(&message).unwrap();
                 let message = request::prepare_message(json);

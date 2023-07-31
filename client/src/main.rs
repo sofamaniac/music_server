@@ -18,11 +18,12 @@ use tui::{
     layout::{Alignment, Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::Span,
-    widgets::{Block, BorderType, Borders, List, ListState},
+    widgets::{Block, BorderType, Borders, Gauge, List, ListState, Paragraph, Wrap},
     Frame, Terminal,
 };
 
 mod app;
+mod player;
 use app::App;
 
 async fn start_ui(app: &Arc<Mutex<App>>) -> Result<(), Box<dyn Error>> {
@@ -49,10 +50,10 @@ async fn start_ui(app: &Arc<Mutex<App>>) -> Result<(), Box<dyn Error>> {
 
 async fn listen(app: &Arc<Mutex<App>>, stream: &mut OwnedReadHalf) -> Result<(), std::io::Error> {
     app.lock().await.request_sources().await;
-    app.lock().await.state.select(Some(0));
     loop {
         stream.readable().await?;
 
+        // an answer is preceded by its size
         let mut size = [0; 8];
         stream.read_exact(&mut size).await;
         let size = usize::from_be_bytes(size);
@@ -78,8 +79,14 @@ async fn listen(app: &Arc<Mutex<App>>, stream: &mut OwnedReadHalf) -> Result<(),
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    let stream = TcpStream::connect("127.0.0.1:8080").await.unwrap();
-    let (mut rx, mut tx) = stream.into_split();
+    let stream = match TcpStream::connect("127.0.0.1:8080").await {
+        Ok(stream) => stream,
+        Err(err) => {
+            println!("Cannot connect to the server {}", err);
+            return Err(err.into());
+        }
+    };
+    let (mut rx, tx) = stream.into_split();
     let app = Arc::new(Mutex::new(App::new(tx)));
     let app_clone = Arc::clone(&app);
     tokio::spawn(async move { listen(&app_clone, &mut rx).await });
@@ -90,19 +97,50 @@ async fn main() -> Result<(), Box<dyn Error>> {
 async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &Arc<Mutex<App>>) -> io::Result<()> {
     loop {
         let mut app = app.lock().await;
-        terminal.draw(|f| ui(f, &app))?;
+        let player_state = app.player.get_state();
+        terminal.draw(|f| ui(f, &app, player_state))?;
 
         // avoid to block refresh
         if poll(Duration::from_millis(50))? {
             if let Event::Key(key) = event::read()? {
                 match key.code {
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('j') => app.handle_event(app::Direction::Down).await,
-                    KeyCode::Char('J') => app.handle_event(app::Direction::DownPanel).await,
-                    KeyCode::Char('k') => app.handle_event(app::Direction::Up).await,
-                    KeyCode::Char('K') => app.handle_event(app::Direction::UpPanel).await,
-                    KeyCode::Char('L') => app.handle_event(app::Direction::RightPanel).await,
-                    KeyCode::Char('H') => app.handle_event(app::Direction::LeftPanel).await,
+                    KeyCode::Char('j') => {
+                        app.handle_event(app::Event::Move(app::Direction::Down))
+                            .await
+                    }
+                    KeyCode::Char('J') => {
+                        app.handle_event(app::Event::Move(app::Direction::DownPanel))
+                            .await
+                    }
+                    KeyCode::Char('k') => {
+                        app.handle_event(app::Event::Move(app::Direction::Up)).await
+                    }
+                    KeyCode::Char('K') => {
+                        app.handle_event(app::Event::Move(app::Direction::UpPanel))
+                            .await
+                    }
+                    KeyCode::Char('L') => {
+                        app.handle_event(app::Event::Move(app::Direction::RightPanel))
+                            .await
+                    }
+                    KeyCode::Char('H') => {
+                        app.handle_event(app::Event::Move(app::Direction::LeftPanel))
+                            .await
+                    }
+                    KeyCode::Char(' ') => app.handle_event(app::Event::Pause).await,
+                    KeyCode::Enter => match app.current_panel {
+                        app::Panel::Sources => app.current_panel = app::Panel::Playlists,
+                        app::Panel::Playlists => app.current_panel = app::Panel::Songs,
+                        app::Panel::Songs => app.handle_event(app::Event::Play).await,
+                    },
+                    KeyCode::Char('d') => app.handle_event(app::Event::VolumeDown).await,
+                    KeyCode::Char('f') => app.handle_event(app::Event::VolumeUp).await,
+                    KeyCode::Char('T') => app.handle_event(app::Event::Download).await,
+                    KeyCode::Char('<') => app.handle_event(app::Event::Prev).await,
+                    KeyCode::Char('>') => app.handle_event(app::Event::Next).await,
+                    KeyCode::Char('a') => app.handle_event(app::Event::Auto).await,
+                    KeyCode::Char('y') => app.handle_event(app::Event::Shuffle).await,
                     _ => (),
                 }
             }
@@ -110,7 +148,11 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &Arc<Mutex<App>>) 
     }
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &tokio::sync::MutexGuard<App>) {
+fn ui<B: Backend>(
+    f: &mut Frame<B>,
+    app: &tokio::sync::MutexGuard<App>,
+    player_state: player::State,
+) {
     // Wrapping block for a group
     // Just draw the block and the group on the same area and build the group
     // with at least a margin of 1
@@ -124,30 +166,83 @@ fn ui<B: Backend>(f: &mut Frame<B>, app: &tokio::sync::MutexGuard<App>) {
         .border_type(BorderType::Rounded);
     f.render_widget(block, size);
 
+    // Bottom chunk: Player info
+    let main_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .margin(1)
+        .constraints([Constraint::Max(900), Constraint::Length(3)])
+        .split(f.size());
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .margin(1)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)].as_ref())
-        .split(f.size());
+        .constraints([Constraint::Percentage(20), Constraint::Percentage(80)].as_ref())
+        .split(main_chunks[0]);
 
     let left_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
-            Constraint::Ratio(1, 3),
+            Constraint::Max(5),
+            Constraint::Max(10),
+            Constraint::Max(6),
+            Constraint::Max(7),
+            Constraint::Max(0),
         ])
         .split(chunks[0]);
 
     let source_widget = app.get_sources_widget();
-    let mut source_state = app.state.clone();
+    let mut source_state = match app.current_panel {
+        app::Panel::Sources => app.state.clone(),
+        _ => ListState::default(),
+    };
     f.render_stateful_widget(source_widget, left_chunks[0], &mut source_state);
 
-    let playlist_widget = app.get_playlist_widget();
-    let mut playlist_state = app.get_playlists_state();
+    let playlist_widget = app.get_playlists_widget();
+    let mut playlist_state = match app.current_panel {
+        app::Panel::Playlists => app.get_playlists_state(),
+        _ => ListState::default(),
+    };
     f.render_stateful_widget(playlist_widget, left_chunks[1], &mut playlist_state);
 
+    let option_widget = app.get_options_widget();
+    f.render_widget(option_widget, left_chunks[2]);
+
+    let info_widget = app.get_info_widget();
+    f.render_widget(info_widget, left_chunks[3]);
+
     let songs_widget = app.get_songs_widget();
-    let mut songs_state = app.get_songs_state();
+    let mut songs_state = match app.current_panel {
+        app::Panel::Songs => app.get_songs_state(),
+        _ => ListState::default(),
+    };
     f.render_stateful_widget(songs_widget, chunks[1], &mut songs_state);
+
+    let percentage = if player_state.duration == 0 {
+        0
+    } else {
+        (player_state.time_pos * 100) / player_state.duration
+    };
+    let player_info = format!(
+        "{} - {}/{}",
+        player_state.title,
+        duration_to_string(Duration::from_secs(player_state.time_pos as u64)),
+        duration_to_string(Duration::from_secs(player_state.duration as u64))
+    );
+
+    let player_widget = Gauge::default()
+        .block(Block::default().borders(Borders::ALL).title(player_info))
+        .gauge_style(Style::default().fg(Color::White).bg(Color::Black))
+        .percent(percentage as u16);
+    f.render_widget(player_widget, main_chunks[1])
+}
+
+fn duration_to_string(dur: Duration) -> String {
+    let secs = dur.as_secs();
+    let (minutes, secs) = (secs / 60, secs % 60);
+    let (hours, minutes) = (minutes / 60, minutes%60);
+    let min_sec_str = format!("{:0width$}:{:0width$}", minutes, secs, width=2);
+    if hours == 0 {
+        min_sec_str
+    } else {
+        format!("{:0width$}:{}", hours, min_sec_str, width=2)
+    }
 }

@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fmt, str::Bytes};
+use std::{fmt};
 use tokio::sync::mpsc::{error::SendError, Sender};
 
 use crate::source_types::{Playlist, Song, SourceError};

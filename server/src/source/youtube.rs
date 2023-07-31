@@ -1,6 +1,7 @@
 #![warn(clippy::unwrap_used)]
 extern crate google_youtube3 as youtube3;
 use music_server::request::{send_request, Answer, AnswerType, Request};
+use tokio::sync::broadcast::error::RecvError;
 use super::Song as YoutubeSong;
 use super::{Playlist, Song, Source, SourceError, SourceResult};
 use crate::utils::parse_duration;
@@ -373,10 +374,10 @@ impl Source for Client {
         loop {
             let _ = match self.in_channel.recv().await {
                 Ok(msg) => self.handle_request(msg).await,
-                Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
+                Err(RecvError::Closed) => {
                     break;
-                } // TODO handle socket closing
+                },
+                _ => continue
             };
         }
     }

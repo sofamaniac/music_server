@@ -11,3 +11,4 @@ tokio = { version = "1.29.1", features = ["full"] }
 tui = "0.19.0"
 music_server = {path = "../"}
 serde_json = "1.0.104"
+libmpv = {git = "https://github.com/ParadoxSpiral/libmpv-rs.git", rev = "3e6c389"}

@@ -117,6 +117,7 @@ pub async fn download_yt_song(
     let args = vec![
         Arg::new("--quiet"),
         Arg::new("--extract-audio"),
+        Arg::new("--embed-metadata"),
         Arg::new_with_arg("--output", out_template),
         Arg::new_with_arg("--print", "after_move:filepath"),
     ];
@@ -138,6 +139,7 @@ pub async fn download_spotify_song(
     let args = vec![
         Arg::new("--quiet"),
         Arg::new("--extract-audio"),
+        Arg::new("--embed-metadata"),
         Arg::new_with_arg("--default-search", "ytsearch"),
         Arg::new_with_arg("--output", out_template),
         Arg::new_with_arg("--print", "after_move:filepath"),

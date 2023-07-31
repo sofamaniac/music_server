@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{PlayableItem, PlaylistId, SimplifiedPlaylist};
+use tokio::sync::broadcast::error::RecvError;
 
 use crate::{config, db, utils};
 use music_server::request::{send_request, Answer, AnswerType, Request, RequestType};
@@ -196,10 +197,10 @@ impl Client {
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
+                Err(RecvError::Closed) => {
                     break;
-                } // TODO handle socket closing
+                },
+                _ => continue
             };
         }
     }
@@ -311,10 +312,10 @@ impl Source for Client {
         loop {
             let _ = match self.in_channel.recv().await {
                 Ok(msg) => self.handle_request(msg).await,
-                Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
+                Err(RecvError::Closed) => {
                     break;
-                } // TODO handle socket closing
+                },
+                _ => continue
             };
         }
     }
