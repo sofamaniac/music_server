@@ -1,12 +1,13 @@
-mod config;
-mod db;
-mod request;
-mod source;
-mod utils;
 use std::io;
 
-use request::{handle_request, Request, Answer};
-use source::{spotify, youtube, Source};
+mod config;
+mod db;
+mod source;
+mod utils;
+
+use crate::source::{spotify, youtube, Source};
+use music_server::request::{self, handle_request, Answer, Request};
+use tokio::io::AsyncReadExt;
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::runtime::Builder;
@@ -56,43 +57,40 @@ fn start_server() {
 }
 
 async fn stream_read(
-    stream_rx: OwnedReadHalf,
+    mut stream_rx: OwnedReadHalf,
     broad_tx: broadcast::Sender<Request>,
 ) -> Result<(), std::io::Error> {
     loop {
         stream_rx.readable().await?;
         // Creating the buffer **after** the `await` prevents it from
         // being stored in the async task.
-        let mut buf = [0; 1024];
-        match stream_rx.try_read(&mut buf) {
-            // socket closed
-            Ok(n) if n == 0 => break,
-            Ok(n) => {
-                let message = match std::str::from_utf8(&buf[0..n]) {
-                    Ok(mes) => mes,
-                    Err(_) => continue, // TODO inform client
-                };
-                let request: Request = match handle_request(message.to_owned()).await {
-                    Ok(req) => req,
-                    Err(e) => {
-                        println!("Error while handling request : {}", e);
-                        // TODO inform client
-                        continue;
-                    }
-                };
-                broad_tx.send(request);
-            }
-            Err(ref e) if e.kind() == io::ErrorKind::WouldBlock => {
-                // Readable might generate false positives
+        let mut size = [0; 8];
+        stream_rx.read_exact(&mut size).await;
+        let size = usize::from_be_bytes(size);
+        if size == 0 {
+            // socket was closed
+            break Ok(());
+        }
+        let mut buf = vec![0; size];
+        stream_rx.read_exact(&mut buf).await;
+        let message = match std::str::from_utf8(&buf) {
+            Ok(mes) => mes,
+            Err(err) => {
+                println!("Error while reading {}", err);
+                continue;
+            } // TODO inform client
+        };
+        let request: Request = match handle_request(message.to_owned()).await {
+            Ok(req) => req,
+            Err(e) => {
+                println!("Error while handling request : {} {}", e, message);
+                // TODO inform client
                 continue;
             }
-            Err(e) => {
-                eprintln!("failed to read from socket; err = {:?}", e);
-                return Err(e);
-            }
         };
+        println!("{:?}", request);
+        broad_tx.send(request);
     }
-    Ok(())
 }
 
 async fn stream_write(
@@ -101,11 +99,12 @@ async fn stream_write(
 ) -> Result<(), std::io::Error> {
     loop {
         match mpsc_rx.recv().await {
-            None => continue,
+            None => break Ok(()),
             Some(message) => {
                 let json = serde_json::to_string(&message).unwrap();
+                let message = request::prepare_message(json);
                 stream_tx.writable().await?;
-                stream_tx.try_write(json.as_bytes())?;
+                stream_tx.try_write(&message)?;
             }
         }
     }
@@ -135,9 +134,9 @@ async fn stream_handler(stream: TcpStream) -> Result<(), std::io::Error> {
     let (rx, tx) = stream.into_split();
     let (broad_tx, _) = broadcast::channel::<Request>(16);
     let (mpsc_tx, mpsc_rx) = mpsc::channel::<Answer>(100);
-    tokio::spawn(stream_read(rx, broad_tx.clone()));
+    tokio::spawn(client_spawning(broad_tx.clone(), mpsc_tx)).await;
     tokio::spawn(stream_write(tx, mpsc_rx));
-    tokio::spawn(client_spawning(broad_tx, mpsc_tx));
+    tokio::spawn(stream_read(rx, broad_tx));
     Ok(())
 }
 

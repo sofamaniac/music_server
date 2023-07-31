@@ -1,67 +1,12 @@
-use crate::{
-    db,
-    request::{Answer, AnswerType, ErrorType, ObjRequest, Request, RequestType},
-};
+use crate::db;
+use music_server::request::{Answer, AnswerType, ErrorType, ObjRequest, Request, RequestType};
 pub use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::fmt;
-use std::time::Duration;
 use RequestType::*;
+pub use music_server::source_types::*;
 pub mod spotify;
 pub mod youtube;
 
 pub type SourceResult<T> = Result<T, SourceError>;
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub enum SourceError {
-    PlaylistNotFound,
-}
-
-impl fmt::Display for SourceError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self)
-    }
-}
-
-#[derive(Serialize, Clone, Debug, Deserialize)]
-pub struct Song {
-    pub title: String,
-    pub artits: Vec<String>,
-    pub tags: Vec<String>,
-    pub id: String,
-    pub duration: Duration,
-    pub url: String,
-    pub downloaded: bool,
-}
-
-impl Song {
-    pub fn new(
-        title: String,
-        artits: Vec<String>,
-        tags: Vec<String>,
-        id: String,
-        duration: Duration,
-        url: String,
-    ) -> Self {
-        Song {
-            title,
-            artits,
-            tags,
-            id,
-            duration,
-            url,
-            downloaded: false,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct Playlist {
-    pub title: String,
-    pub tags: Vec<String>,
-    pub id: String,
-    pub size: u32,
-}
 
 pub trait SongTrait {
     fn to_song(&self) -> Song;
@@ -110,7 +55,7 @@ pub trait Source: Sync + Send {
                         }
                         Ok(mut playlist) => {
                             let songs = playlist.get_songs().await;
-                            self.send_with_name(AnswerType::Songs(songs)).await;
+                            self.send_with_name(AnswerType::Songs(playlist.to_playlist(), songs)).await;
                         }
                     }
                 }

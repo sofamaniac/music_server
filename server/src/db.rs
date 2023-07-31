@@ -5,9 +5,14 @@ use std::path::Path;
 use rusqlite::{Connection, Statement};
 use serde::{Deserialize, Serialize};
 
-use crate::source::{Playlist, Song};
+use crate::{source::{Playlist, Song}, config};
 
 pub type Result<T> = rusqlite::Result<T>;
+
+fn get_db_path() -> String {
+    let data_loc = config::get_config().data_location;
+    format!("{}/db.db3", data_loc)
+}
 
 fn prepare<'a>(conn: &'a Connection, query: &str) -> Statement<'a> {
     let stmt = conn.prepare(query);
@@ -29,7 +34,7 @@ fn to_json<T: Serialize>(obj: &T) -> String {
 }
 
 pub fn init() -> Result<()> {
-    let conn = Connection::open("data/db.db3")?;
+    let conn = Connection::open(get_db_path())?;
     conn.execute(
         "CREATE TABLE IF NOT EXISTS TblSong (
             uid INTEGER PRIMARY KEY,
@@ -63,7 +68,7 @@ pub fn init() -> Result<()> {
 
 pub fn playlist_needs_update(id: &str, source: &str, etag: &str) -> bool {
     // returns true if the db is inaccessible
-    let conn = match Connection::open("data/db.db3") {
+    let conn = match Connection::open(get_db_path()) {
         Ok(val) => val,
         Err(_) => return true
     };
@@ -78,7 +83,7 @@ pub fn add_playlist(
     songs: &[Song],
     etag: &str,
 ) -> Result<()> {
-    let conn = Connection::open("data/db.db3")?;
+    let conn = Connection::open(get_db_path())?;
     conn.execute(
         "REPLACE INTO TblPlaylist (uid, id, title, size, etag, source) VALUES ((SELECT uid FROM TblPlaylist WHERE id = ?1 AND source = ?5), ?1, ?2, ?3, ?4, ?5)",
         (
@@ -114,7 +119,7 @@ pub fn add_playlist(
 }
 
 pub fn update_songs(songs: &[Song], source: &str) -> Result<()> {
-    let conn = Connection::open("data/db.db3").expect("cannot open db");
+    let conn = Connection::open(get_db_path()).expect("cannot open db");
     for s in songs.iter() {
         conn.execute(
             "REPLACE INTO TblSong (uid, id, source, song) VALUES ((SELECT uid FROM TblSong WHERE source = ?2 AND id = ?1), ?1, ?2, ?3)",
@@ -129,7 +134,7 @@ pub fn update_songs(songs: &[Song], source: &str) -> Result<()> {
 }
 
 pub fn remove_downloaded(songs: &[Song], source: &str) -> Result<Vec<Song>> {
-    let conn = Connection::open("data/db.db3")?;
+    let conn = Connection::open(get_db_path())?;
     let mut res = vec![];
     let query = "SELECT song FROM TblSong WHERE source = ?1 AND id = ?2";
     let mut stmt = prepare(&conn, query);
@@ -147,7 +152,7 @@ pub fn remove_downloaded(songs: &[Song], source: &str) -> Result<Vec<Song>> {
 }
 
 pub fn get_playlist_songs(id: &str, source: &str) -> Result<Vec<Song>> {
-    let conn = Connection::open("data/db.db3")?;
+    let conn = Connection::open(get_db_path())?;
     let query = "SELECT uid FROM TblPlaylist WHERE source = ?1 AND id = ?2";
     let mut stmt = prepare(&conn, query);
     let uid_playlist = stmt.query_row((source, id), |row| row.get::<_, i32>(0))?;
@@ -169,7 +174,7 @@ pub fn get_playlist_songs(id: &str, source: &str) -> Result<Vec<Song>> {
 }
 
 pub fn load_playlist(id: &str, source: &str) -> Result<Playlist> {
-    let conn = Connection::open("data/db.db3")?;
+    let conn = Connection::open(get_db_path())?;
     let stmt = "SELECT uid, title, size, etag FROM TblPlaylist WHERE source = ?1 AND id = ?2";
     let mut stmt = prepare(&conn, stmt);
     stmt.query_row((source, id), |row| {

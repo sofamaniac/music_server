@@ -5,12 +5,13 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{PlayableItem, PlaylistId, SimplifiedPlaylist};
+use tokio::sync::broadcast::error::RecvError;
 
-use crate::request::{send_request, Answer, AnswerType, Request, RequestType};
 use crate::{config, db, utils};
+use music_server::request::{send_request, Answer, AnswerType, Request, RequestType};
 
 use super::Song;
-use super::{Playlist, PlaylistTrait, Song as SpotifySong, Source, SourceResult, SourceError};
+use super::{Playlist, PlaylistTrait, Song as SpotifySong, Source, SourceError, SourceResult};
 use rspotify::{self, AuthCodeSpotify};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{self, Sender};
@@ -42,7 +43,9 @@ async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<Son
             PlayableItem::Track(fulltrack) => songs.push(Song::new(
                 fulltrack.name,
                 fulltrack
-                    .artists.iter().cloned()
+                    .artists
+                    .iter()
+                    .cloned()
                     .map(|artist| artist.name)
                     .collect(),
                 Default::default(),
@@ -147,6 +150,7 @@ impl Client {
     ) -> Client {
         let config = config::get_config();
         let credentials = rspotify::Credentials::new(&config.spotify_id, &config.spotify_secret);
+        let secrets = config.secrets_location;
         let oauth = rspotify::OAuth {
             redirect_uri: "https://localhost:8888/callback".to_string(),
             scopes: rspotify::scopes!("user-read-recently-played"),
@@ -156,7 +160,7 @@ impl Client {
             token_cached: true,
             token_refreshing: true,
             pagination_chunks: MAX_RESULT,
-            cache_path: Path::new("data/secrets/spotify.cache").to_path_buf(),
+            cache_path: Path::new(&format!("{}/spotify.cache", secrets)).to_path_buf(),
             ..Default::default()
         };
         let client = rspotify::AuthCodeSpotify::with_config(credentials, oauth, client_config);
@@ -184,7 +188,8 @@ impl Client {
                     if request.client == self.name {
                         match request.ty {
                             RequestType::Message(url) => {
-                                let code = self.client.parse_response_code(&url).unwrap_or_default();
+                                let code =
+                                    self.client.parse_response_code(&url).unwrap_or_default();
                                 self.client.request_token(&code).await;
                                 break;
                             }
@@ -192,9 +197,10 @@ impl Client {
                         }
                     }
                 }
-                Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
-                } // TODO handle socket closing
+                Err(RecvError::Closed) => {
+                    break;
+                },
+                _ => continue
             };
         }
     }
@@ -209,14 +215,19 @@ impl Client {
 
                 if expired {
                     // Ensure that we actually got a token from the refetch
-                    match self.client.refetch_token().await.unwrap() {
-                        Some(refreshed_token) => {
-                            *self.client.get_token().lock().await.unwrap() = Some(refreshed_token)
-                        }
-                        // If not, prompt the user for it
-                        None => {
-                            self.reauth().await;
-                        }
+                    let token = self.client.refetch_token().await;
+                    match token {
+                        Err(err) => println!("Error: {}", err),
+                        Ok(val) => match val {
+                            Some(refreshed_token) => {
+                                *self.client.get_token().lock().await.unwrap() =
+                                    Some(refreshed_token)
+                            }
+                            // If not, prompt the user for it
+                            None => {
+                                self.reauth().await;
+                            }
+                        },
                     }
                 }
             }
@@ -235,7 +246,7 @@ impl Client {
 
     pub async fn fetch_all_playlists(&mut self) {
         if self.playlist_loaded {
-            return ;
+            return;
         }
         let (tx, mut rx) = mpsc::channel(32);
         let playlists = self.client.current_user_playlists();
@@ -286,13 +297,10 @@ impl Source for Client {
     }
     async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<Box<dyn PlaylistTrait>> {
         let _ = self.get_all_playlists().await;
-        let playlist = 
-            self.playlists
-                .iter().cloned()
-                .find(|p| p.id == id);
+        let playlist = self.playlists.iter().cloned().find(|p| p.id == id);
         match playlist {
             Some(playlist) => Ok(Box::new(playlist)),
-            None => Err(SourceError::PlaylistNotFound)
+            None => Err(SourceError::PlaylistNotFound),
         }
     }
     async fn init(&mut self) -> () {
@@ -304,15 +312,18 @@ impl Source for Client {
         loop {
             let _ = match self.in_channel.recv().await {
                 Ok(msg) => self.handle_request(msg).await,
-                Err(e) => {
-                    eprintln!("failed to read from socket; err = {:?}", e);
-                } // TODO handle socket closing
+                Err(RecvError::Closed) => {
+                    break;
+                },
+                _ => continue
             };
         }
     }
     async fn download_songs(&self, songs: &[SpotifySong], playlist_title: String) {
         let songs = songs.to_vec();
         let name = self.name.clone();
-        tokio::spawn(async move { utils::download_spotify_playlist(songs, name, playlist_title).await });
+        tokio::spawn(
+            async move { utils::download_spotify_playlist(songs, name, playlist_title).await },
+        );
     }
 }
