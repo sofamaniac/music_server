@@ -126,7 +126,7 @@ pub async fn download_yt_song(
 }
 
 fn get_song_title(song: &Song) -> String {
-    format!("{} - {}", song.artits.join(", "), song.title)
+    format!("{} - {}", song.artists.join(", "), song.title)
 }
 
 pub async fn download_spotify_song(

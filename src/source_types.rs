@@ -15,7 +15,7 @@ impl fmt::Display for SourceError {
 #[derive(Serialize, Clone, Debug, Deserialize, Default)]
 pub struct Song {
     pub title: String,
-    pub artits: Vec<String>,
+    pub artists: Vec<String>,
     pub tags: Vec<String>,
     pub id: String,
     pub duration: Duration,
@@ -26,7 +26,7 @@ pub struct Song {
 impl Song {
     pub fn new(
         title: String,
-        artits: Vec<String>,
+        artists: Vec<String>,
         tags: Vec<String>,
         id: String,
         duration: Duration,
@@ -34,7 +34,7 @@ impl Song {
     ) -> Self {
         Song {
             title,
-            artits,
+            artists,
             tags,
             id,
             duration,

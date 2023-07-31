@@ -116,7 +116,7 @@ impl PlayerInterface {
         res.insert("mpris:trackid", Value::Str(song.id.into()));
         res.insert("mpris:length", Value::U64(song.duration.as_micros() as u64));
         res.insert("xesam:title", Value::Str(song.title.into()));
-        res.insert("xesam:artist", Value::Str(song.artits.join(", ").into()));
+        res.insert("xesam:artist", Value::Str(song.artists.join(", ").into()));
         res
     }
 

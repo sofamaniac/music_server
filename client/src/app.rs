@@ -385,7 +385,7 @@ impl App {
             let song = &self.sources[source].playlist[playlist].songs[song];
             let items = vec![
                 ListItem::new(format!("Title:\n {}", song.title.clone())),
-                ListItem::new(format!("Artists:\n {}", song.artits.clone().join(","))),
+                ListItem::new(format!("Artists:\n {}", song.artists.clone().join(","))),
             ];
             make_list(items, "Information")
         } else {
