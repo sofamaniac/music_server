@@ -4,6 +4,7 @@ mod config;
 mod db;
 mod source;
 mod utils;
+mod lastfm;
 
 use crate::source::{spotify, youtube, Source};
 use music_server::request::{self, handle_request, Answer, Request};

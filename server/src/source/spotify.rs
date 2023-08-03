@@ -1,35 +1,81 @@
 #![warn(clippy::unwrap_used)]
 use std::path::Path;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{PlayableItem, PlaylistId, SimplifiedPlaylist};
+use serde::{Serialize, Deserialize};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{config, db, utils};
 use music_server::request::{send_request, Answer, AnswerType, Request, RequestType};
 
-use super::Song;
-use super::{Playlist, PlaylistTrait, Song as SpotifySong, Source, SourceError, SourceResult};
+use super::{Song, SongTrait};
+use super::{Playlist, PlaylistTrait, Source, SourceError, SourceResult};
 use rspotify::{self, AuthCodeSpotify};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{self, Sender};
 
 const MAX_RESULT: u32 = 50;
 
-#[derive(Clone, Debug, Default)]
-struct SpotifyPlaylist {
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SpotifySong {
+    pub song: Song,
+    pub isrc: Option<String>,
+}
+
+impl SongTrait for SpotifySong {
+    fn to_song(&self) -> Song {
+        self.song.clone()
+    }
+    fn get_url(&self) -> String {
+        self.song.url.clone()
+    }
+    fn get_downloaded(&self) -> bool {
+        self.song.downloaded
+    }
+
+    fn get_id(&self) -> Arc<str> {
+        self.song.get_id()
+    }
+
+    fn get_title(&self) -> Arc<str> {
+        self.song.get_title()
+    }
+
+    fn get_artists(&self) -> Arc<[String]> {
+        self.song.artists.clone()
+    }
+
+    fn set_downloaded(&mut self, val: bool) {
+        self.song.downloaded = val;
+    }
+
+    fn set_url(&mut self, val: String) {
+        self.song.url = val;
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SpotifyPlaylist {
     playlist: Playlist,
     songs: Vec<SpotifySong>,
-    id: String,
+    id: Arc<str>,
     etag: String, // used to check if playlist has changed
     is_loaded: bool,
     client: AuthCodeSpotify,
-    source: String,
+    source: Arc<str>,
 }
 
-async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<Song> {
+impl Default for SpotifyPlaylist {
+    fn default() -> Self {
+        SpotifyPlaylist { id: "".into(),..Default::default() }
+    }
+}
+
+async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<SpotifySong> {
     let mut playlist_items = client.playlist_items(id, None, None);
     let mut songs = vec![];
     while let Ok(page) = playlist_items.try_next().await {
@@ -40,8 +86,8 @@ async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<Son
         let tracks = items.track.unwrap();
         match tracks {
             PlayableItem::Episode(_) => (),
-            PlayableItem::Track(fulltrack) => songs.push(Song::new(
-                fulltrack.name,
+            PlayableItem::Track(fulltrack) => songs.push(SpotifySong {
+                song: Song::new(fulltrack.name.into(),
                 fulltrack
                     .artists
                     .iter()
@@ -50,31 +96,32 @@ async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<Son
                     .collect(),
                 Default::default(),
                 if fulltrack.id.is_some() {
-                    fulltrack.id.unwrap().to_string()
+                    fulltrack.id.unwrap().to_string().into()
                 } else {
-                    "".to_string()
+                    "".into()
                 },
                 fulltrack.duration.to_std().unwrap(),
-                Default::default(),
-            )),
+                Default::default(),),
+                isrc: fulltrack.external_ids.get("isrc").cloned()
+            }),
         }
     }
     songs
 }
 
 impl SpotifyPlaylist {
-    pub async fn new(id: &str, client: AuthCodeSpotify, source: String) -> Self {
+    pub async fn new(id: &str, client: AuthCodeSpotify, source: Arc<str>) -> Self {
         let id = PlaylistId::from_uri(id).unwrap();
         let playlist = client.playlist(id, None, None).await.unwrap();
         SpotifyPlaylist {
             playlist: Playlist {
-                title: playlist.name,
+                title: playlist.name.into(),
                 tags: Default::default(),
-                id: playlist.id.to_string(),
+                id: playlist.id.to_string().into(),
                 size: playlist.tracks.total,
             },
             songs: Vec::with_capacity(playlist.tracks.total as usize),
-            id: playlist.id.to_string(),
+            id: playlist.id.to_string().into(),
             etag: playlist.snapshot_id,
             is_loaded: false,
             client,
@@ -96,7 +143,7 @@ impl SpotifyPlaylist {
             let playlist = db::load_playlist(&self.id, &self.source).unwrap();
             self.playlist.title = playlist.title;
             self.playlist.size = playlist.size;
-            self.songs = db::get_playlist_songs(&self.id, &self.source).unwrap();
+            self.songs = db::get_playlist_songs(&self.id, &self.source).unwrap_or_default();
             self.is_loaded = true;
         }
         db_bool
@@ -104,16 +151,16 @@ impl SpotifyPlaylist {
 }
 
 #[async_trait]
-impl PlaylistTrait for SpotifyPlaylist {
-    fn get_id(&self) -> String {
+impl PlaylistTrait<SpotifySong> for SpotifyPlaylist {
+    fn get_id(&self) -> Arc<str> {
         self.id.clone()
     }
 
-    fn get_source(&self) -> String {
+    fn get_source(&self) -> Arc<str> {
         self.source.clone()
     }
 
-    async fn get_songs(&mut self) -> Vec<Song> {
+    async fn get_songs(&mut self) -> Vec<SpotifySong> {
         if !self.is_loaded {
             self.load_all().await
         };
@@ -129,12 +176,12 @@ async fn convert_playlist(
     playlist: SimplifiedPlaylist,
     client: AuthCodeSpotify,
 ) -> SpotifyPlaylist {
-    SpotifyPlaylist::new(&playlist.id.to_string(), client, "Spotify".to_string()).await
+    SpotifyPlaylist::new(&playlist.id.to_string(), client, "Spotify".into()).await
 }
 
 pub struct Client {
     client: rspotify::AuthCodeSpotify,
-    pub name: String,
+    pub name: Arc<str>,
     playlists: Vec<SpotifyPlaylist>,
     in_channel: Receiver<Request>,
     out_channel: Sender<Answer>,
@@ -166,7 +213,7 @@ impl Client {
         let client = rspotify::AuthCodeSpotify::with_config(credentials, oauth, client_config);
         Client {
             client,
-            name: name.to_string(),
+            name: name.into(),
             playlists: Default::default(),
             in_channel,
             out_channel,
@@ -179,7 +226,7 @@ impl Client {
         let url = self.client.get_authorize_url(false).unwrap_or_default();
         send_request(
             self.out_channel.clone(),
-            Answer::new("Spotify".to_string(), AnswerType::Message(url)),
+            Answer::new("Spotify".into(), AnswerType::Message(url.into())),
         )
         .await;
         loop {
@@ -275,8 +322,8 @@ impl Client {
 }
 
 #[async_trait]
-impl Source for Client {
-    fn get_name(&self) -> String {
+impl Source<SpotifySong, SpotifyPlaylist> for Client {
+    fn get_name(&self) -> Arc<str> {
         self.name.clone()
     }
     fn get_number_of_playlist(&self) -> usize {
@@ -295,11 +342,11 @@ impl Source for Client {
         .await;
         self.playlists.iter().map(|p| p.to_playlist()).collect()
     }
-    async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<Box<dyn PlaylistTrait>> {
+    async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<SpotifyPlaylist> {
         let _ = self.get_all_playlists().await;
-        let playlist = self.playlists.iter().cloned().find(|p| p.id == id);
+        let playlist = self.playlists.iter().cloned().find(|p| *p.id == *id);
         match playlist {
-            Some(playlist) => Ok(Box::new(playlist)),
+            Some(playlist) => Ok(playlist),
             None => Err(SourceError::PlaylistNotFound),
         }
     }
@@ -319,11 +366,12 @@ impl Source for Client {
             };
         }
     }
-    async fn download_songs(&self, songs: &[SpotifySong], playlist_title: String) {
+    async fn download_songs(&self, songs: &[SpotifySong], playlist: Playlist) {
         let songs = songs.to_vec();
         let name = self.name.clone();
+        let out_channel = self.out_channel.clone();
         tokio::spawn(
-            async move { utils::download_spotify_playlist(songs, name, playlist_title).await },
+            async move { utils::download_spotify_playlist(&songs, name, &playlist, out_channel).await },
         );
     }
 }

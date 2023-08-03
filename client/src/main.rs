@@ -226,7 +226,7 @@ fn ui<B: Backend>(
     } else {
         (player_state.time_pos * 100) / player_state.duration
     };
-    let percentage = std::cmp::min(percentage, 100);
+    let percentage = std::cmp::min(std::cmp::max(percentage, 0), 100);
     let player_info = format!(
         "{} - {}/{}",
         player_state.title,

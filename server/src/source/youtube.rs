@@ -2,8 +2,8 @@
 extern crate google_youtube3 as youtube3;
 use music_server::request::{send_request, Answer, AnswerType, Request};
 use tokio::sync::broadcast::error::RecvError;
-use super::Song as YoutubeSong;
-use super::{Playlist, Song, Source, SourceError, SourceResult};
+use super::{Song, SongTrait};
+use super::{Playlist, Source, SourceError, SourceResult};
 use crate::utils::parse_duration;
 use crate::{db, utils};
 use async_trait::async_trait;
@@ -14,6 +14,7 @@ use google_youtube3::oauth2::authenticator_delegate::InstalledFlowDelegate;
 use std::default::Default;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 use youtube3::api::Playlist as YtPlaylist;
@@ -24,28 +25,64 @@ use super::PlaylistTrait;
 use crate::config;
 
 const MAX_RESULT: u32 = 50;
+pub type YoutubeSong = Song;
+impl SongTrait for YoutubeSong {
+    fn to_song(&self) -> YoutubeSong {
+        self.clone()
+    }
+    fn get_downloaded(&self) -> bool {
+        self.downloaded
+    }
+    fn get_url(&self) -> String {
+        self.url.clone()
+    }
+    fn get_id(&self) -> Arc<str> {
+        self.id.clone()
+    }
 
-#[derive(Clone, Default)]
-struct YoutubePlaylist {
+    fn get_title(&self) -> Arc<str> {
+        self.title.clone()
+    }
+    fn get_artists(&self) -> Arc<[String]> {
+        self.artists.clone()
+    }
+
+    fn set_downloaded(&mut self, val: bool) {
+        self.downloaded = val;
+    }
+
+    fn set_url(&mut self, val: String) {
+        self.url = val
+    }
+}
+
+#[derive(Clone)]
+pub struct YoutubePlaylist {
     playlist: Playlist,
     songs: Vec<YoutubeSong>,
-    id: String,
+    id: Arc<str>,
     next_page_token: String,
     etag: String, // used to check if playlist has changed
     hub: Option<YouTube<HttpsConnector<HttpConnector>>>,
     is_loaded: bool,
-    source: String,
+    source: Arc<str>,
+}
+
+impl Default for YoutubePlaylist {
+    fn default() -> Self {
+        YoutubePlaylist { id: "".into(), source: "".into(), .. Default::default() }
+    }
 }
 
 impl YoutubePlaylist {
     pub fn new(
-        name: String,
-        id: String,
+        name: Arc<str>,
+        id: Arc<str>,
         size: u32,
         next_page: String,
         etag: String,
         hub: YouTube<HttpsConnector<HttpConnector>>,
-        source: String,
+        source: Arc<str>,
     ) -> Self {
         YoutubePlaylist {
             playlist: Playlist {
@@ -83,9 +120,9 @@ impl YoutubePlaylist {
     }
 
     async fn fetch_songs_data(&mut self) {
-        let songs_id: Vec<String> = self.songs.iter().map(|s| s.id.clone()).collect();
+        let songs_id: Vec<Arc<str>> = self.songs.iter().map(|s| s.id.clone()).collect();
         let chunks = songs_id.chunks(MAX_RESULT as usize);
-        let chunk_list: Vec<&[String]> = chunks.collect();
+        let chunk_list: Vec<&[Arc<str>]> = chunks.collect();
         if self.hub.is_none() {
             return;
         }
@@ -108,7 +145,7 @@ impl YoutubePlaylist {
                 let song_pos = self
                     .songs
                     .iter()
-                    .position(|sg| sg.id == id)
+                    .position(|sg| *sg.id == id)
                     .unwrap_or_default();
                 self.songs[song_pos].tags = tags;
                 self.songs[song_pos].duration = parse_duration(&duration);
@@ -156,15 +193,15 @@ impl YoutubePlaylist {
 }
 
 #[async_trait]
-impl PlaylistTrait for YoutubePlaylist {
-    fn get_id(&self) -> String {
+impl PlaylistTrait<YoutubeSong> for YoutubePlaylist {
+    fn get_id(&self) -> Arc<str> {
         self.id.clone()
     }
 
-    fn get_source(&self) -> String {
+    fn get_source(&self) -> Arc<str> {
         self.source.clone()
     }
-    async fn get_songs(&mut self) -> Vec<Song> {
+    async fn get_songs(&mut self) -> Vec<YoutubeSong> {
         if !self.is_fully_loaded() {
             self.load_all().await
         };
@@ -177,7 +214,7 @@ impl PlaylistTrait for YoutubePlaylist {
 
 pub struct Client {
     pub hub: YouTube<HttpsConnector<HttpConnector>>,
-    pub name: String,
+    pub name: Arc<str>,
     playlists: Vec<YoutubePlaylist>,
     in_channel: Receiver<Request>,
     out_channel: Sender<Answer>,
@@ -231,7 +268,7 @@ impl Client {
         );
         Ok(Client {
             hub,
-            name: name.to_string(),
+            name: name.into(),
             playlists: Default::default(),
             in_channel,
             out_channel,
@@ -242,7 +279,7 @@ impl Client {
     pub async fn fetch_all_playlists(&mut self) {
         if !self.playlist_loaded {
             let mut liked_videos = self.load_playlist_by_id("LL").await;
-            liked_videos.playlist.title = "Liked Videos".to_string();
+            liked_videos.playlist.title = "Liked Videos".into();
             let mut playlists_list = self.load_all_playlists_mine().await;
             playlists_list.push(liked_videos);
             self.playlists = playlists_list;
@@ -277,7 +314,7 @@ impl Client {
     }
 
     async fn load_playlist_by_id(&self, id: &str) -> YoutubePlaylist {
-        match self.playlists.iter().find(|p| p.id == id) {
+        match self.playlists.iter().find(|p| *p.id == *id) {
             Some(p) => p.clone(),
             None => {
                 let request = self
@@ -311,7 +348,7 @@ fn convert_playlist_list(
 
 fn song_from_item(item: PlaylistItem) -> Option<YoutubeSong> {
     let details = item.snippet.unwrap_or_default();
-    let title = &details.title.unwrap_or_default();
+    let title = details.title.unwrap_or_default();
     let id = details
         .resource_id
         .unwrap_or_default()
@@ -325,10 +362,10 @@ fn song_from_item(item: PlaylistItem) -> Option<YoutubeSong> {
         None
     } else {
         Some(YoutubeSong::new(
-            title.to_string(),
-            vec![artists.to_string()],
+            title.into(),
+            Arc::from(vec![artists.into()]),
             Default::default(),
-            id,
+            Arc::from(id),
             Default::default(),
             Default::default(),
         ))
@@ -346,20 +383,20 @@ fn convert_playlist(
     let id = playlist.id.unwrap_or_default();
     let etag = playlist.etag.unwrap_or_default();
     YoutubePlaylist::new(
-        title,
-        id,
+        Arc::from(title),
+        Arc::from(id),
         size,
         "".to_string(),
         etag,
         hub,
-        "Youtube".to_string(),
+        "Youtube".into(),
     )
 }
 
 #[async_trait]
-impl Source for Client {
-    fn get_name(&self) -> String {
-        self.name.to_string()
+impl Source<YoutubeSong, YoutubePlaylist> for Client {
+    fn get_name(&self) -> Arc<str> {
+        self.name.clone()
     }
     async fn get_all_playlists(&mut self) -> std::vec::Vec<Playlist> {
         self.load_all_playlists().await
@@ -391,17 +428,18 @@ impl Source for Client {
         self.get_all_playlists().await;
     }
 
-    async fn download_songs(&self, songs: &[Song], playlist_title: String) {
+    async fn download_songs(&self, songs: &[YoutubeSong], playlist: Playlist) {
         let songs = songs.to_vec();
         let name = self.name.clone();
-        tokio::spawn(async move { utils::download_yt_playlist(songs, name, playlist_title).await });
+        let out_channel = self.out_channel.clone();
+        tokio::spawn(async move { utils::download_yt_playlist(&songs, name, &playlist, out_channel).await });
     }
 
-    async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<Box<dyn PlaylistTrait>> {
+    async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<YoutubePlaylist> {
         let _ = self.load_all_playlists().await;
-        let playlist = self.playlists.iter().cloned().find(|p| p.id == id);
+        let playlist = self.playlists.iter().cloned().find(|p| *p.id == *id);
         match playlist {
-            Some(playlist) => Ok(Box::new(playlist)),
+            Some(playlist) => Ok(playlist),
             None => Err(SourceError::PlaylistNotFound),
         }
     }
@@ -440,18 +478,19 @@ async fn present_user_url(
     need_code: bool,
     out: Sender<Answer>,
 ) -> Result<String, String> {
-    let message: String = if need_code {
-        "Inputting code to authenticate not supported".to_owned()
-    } else {
-        format!(
+    let url_message = format!(
             "Please direct your browser to {} and follow the instructions displayed \
              there.",
             url
-        )
+        );
+    let message: &str = if need_code {
+        "Inputting code to authenticate not supported"
+    } else {
+        &url_message
     };
     send_request(
         out,
-        Answer::new("Youtube".to_string(), AnswerType::Message(message)),
+        Answer::new("Youtube".into(), AnswerType::Message(message.into())),
     )
     .await;
     Ok(String::new())

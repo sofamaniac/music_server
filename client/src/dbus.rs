@@ -104,19 +104,21 @@ impl PlayerInterface {
     }
     #[dbus_interface(property)]
     async fn position(&self) -> u64 {
-        let state = self.app.lock().await.player.get_state();
+        let app = self.app.lock().await;
+        let state = app.player.get_state();
         (state.time_pos * 1000000) as u64
     }
     #[dbus_interface(property)]
     async fn metadata(&self) -> HashMap<&str, zbus::zvariant::Value> {
         use zbus::zvariant::Value;
         let app = self.app.lock().await;
-        let song = app.get_playing_song_info();
         let mut res = HashMap::new();
-        res.insert("mpris:trackid", Value::Str(song.id.into()));
-        res.insert("mpris:length", Value::U64(song.duration.as_micros() as u64));
-        res.insert("xesam:title", Value::Str(song.title.into()));
-        res.insert("xesam:artist", Value::Str(song.artists.join(", ").into()));
+        if let Some(song) = app.get_playing_song_info() {
+            res.insert("mpris:trackid", Value::Str(song.id.clone().into()));
+            res.insert("mpris:length", Value::U64(song.duration.as_micros() as u64));
+            res.insert("xesam:title", Value::Str(song.title.clone().into()));
+            res.insert("xesam:artist", Value::Str(song.artists.join(", ").into()));
+        }
         res
     }
 

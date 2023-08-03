@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::{Connection, Statement};
 use serde::{Deserialize, Serialize};
 
-use crate::{source::{Playlist, Song}, config};
+use crate::{source::{Playlist, Song, SongTrait}, config};
 
 pub type Result<T> = rusqlite::Result<T>;
 
@@ -26,7 +26,7 @@ fn prepare<'a>(conn: &'a Connection, query: &str) -> Statement<'a> {
 }
 
 fn from_json<'a, T: Deserialize<'a>>(json: &'a str) -> T {
-    serde_json::from_str(json).expect("Invalid data read from db")
+    serde_json::from_str(json).unwrap_or_else(|_| panic!("Invalid data read from db {}", json))
 }
 
 fn to_json<T: Serialize>(obj: &T) -> String {
@@ -77,10 +77,10 @@ pub fn playlist_needs_update(id: &str, source: &str, etag: &str) -> bool {
     stmt.exists(rusqlite::params![source, id, etag]).unwrap_or(true)
 }
 
-pub fn add_playlist(
+pub fn add_playlist<T: SongTrait>(
     source: &str,
     playlist: Playlist,
-    songs: &[Song],
+    songs: &[T],
     etag: &str,
 ) -> Result<()> {
     let conn = Connection::open(get_db_path())?;
@@ -102,14 +102,14 @@ pub fn add_playlist(
         conn.execute(
             "REPLACE INTO TblSong (uid, id, source, song) VALUES ((SELECT uid FROM TblSong WHERE source = ?2 AND id = ?1), ?1, ?2, ?3)",
             (
-                &s.id,
+                &s.get_id(),
                 source,
                 to_json(&s),
             ),
         )?;
         let query = "SELECT uid FROM TblSong WHERE  source = ?1 AND id = ?2";
         let mut stmt = prepare(&conn, query);
-        let uid_song: i32 = stmt.query_row((source, &s.id), |row| row.get(0))?;
+        let uid_song: i32 = stmt.query_row((source, &s.get_id()), |row| row.get(0))?;
         conn.execute(
             "REPLACE INTO TblPlaylistSongs (uidPlaylist, uidSong) VALUES (?1, ?2)",
             (uid_playlist, uid_song),
@@ -118,13 +118,13 @@ pub fn add_playlist(
     Ok(())
 }
 
-pub fn update_songs(songs: &[Song], source: &str) -> Result<()> {
+pub fn update_songs<T: SongTrait>(songs: &[T], source: &str) -> Result<()> {
     let conn = Connection::open(get_db_path()).expect("cannot open db");
     for s in songs.iter() {
         conn.execute(
             "REPLACE INTO TblSong (uid, id, source, song) VALUES ((SELECT uid FROM TblSong WHERE source = ?2 AND id = ?1), ?1, ?2, ?3)",
             (
-                &s.id,
+                &s.get_id(),
                 source,
                 to_json(&s),
             ),
@@ -133,25 +133,27 @@ pub fn update_songs(songs: &[Song], source: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn remove_downloaded(songs: &[Song], source: &str) -> Result<Vec<Song>> {
+pub fn remove_downloaded<T: SongTrait>(songs: &[T], source: &str) -> Result<Vec<T>> {
     let conn = Connection::open(get_db_path())?;
     let mut res = vec![];
     let query = "SELECT song FROM TblSong WHERE source = ?1 AND id = ?2";
     let mut stmt = prepare(&conn, query);
     for s in songs.iter() {
+        let s = s.to_song();
         let json = stmt.query_row(rusqlite::params![source, &s.id], |row| {
             row.get::<_, String>(0)
         })?;
-        let song: Song = from_json(&json);
-        let path = Path::new(&song.url);
-        if !song.downloaded || !path.try_exists().unwrap_or(false) {
+        let song: T = from_json(&json);
+        let url = song.get_url();
+        let path = Path::new(&url);
+        if !song.get_downloaded() || !path.try_exists().unwrap_or(false) {
             res.push(song);
         }
     }
     Ok(res)
 }
 
-pub fn get_playlist_songs(id: &str, source: &str) -> Result<Vec<Song>> {
+pub fn get_playlist_songs<T: SongTrait>(id: &str, source: &str) -> Result<Vec<T>> {
     let conn = Connection::open(get_db_path())?;
     let query = "SELECT uid FROM TblPlaylist WHERE source = ?1 AND id = ?2";
     let mut stmt = prepare(&conn, query);
@@ -165,7 +167,7 @@ pub fn get_playlist_songs(id: &str, source: &str) -> Result<Vec<Song>> {
     }
     let query = "SELECT song FROM TblSong WHERE uid = ?1";
     let mut stmt = prepare(&conn, query);
-    let mut songs: Vec<Song> = vec![];
+    let mut songs: Vec<T> = vec![];
     for uid in songs_uid {
         let json = stmt.query_row(rusqlite::params![uid], |row| row.get::<_, String>(0))?;
         songs.push(from_json(&json));
@@ -181,7 +183,7 @@ pub fn load_playlist(id: &str, source: &str) -> Result<Playlist> {
         Ok(Playlist {
             title: row.get(1)?,
             tags: Default::default(),
-            id: id.to_string(),
+            id: id.into(),
             size: row.get(2)?,
         })
     })

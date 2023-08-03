@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use std::{fmt};
+use std::{fmt, sync::Arc};
 use tokio::sync::mpsc::{error::SendError, Sender};
 
 use crate::source_types::{Playlist, Song, SourceError};
@@ -21,21 +21,21 @@ impl fmt::Display for RequestError {
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum RequestType {
     GetAll(ObjRequest),
-    Error(String),
+    Error(Arc<str>),
     Set,
     Add,
     Remove,
     Get(Attr),
     Download(ObjRequest),
-    Message(String),
+    Message(Arc<str>),
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub enum ObjRequest {
     PlaylistList,
-    Playlist(String),
+    Playlist(Arc<str>),
     Song,
-    Client(String),
+    Client(Arc<str>),
     ClientList,
 }
 
@@ -45,9 +45,11 @@ pub enum AnswerType {
     Playlist(Playlist),
     Songs(Playlist, Vec<Song>),
     Song(Song),
-    Client(String),
-    Message(String),
+    Client(Arc<str>),
+    Message(Arc<str>),
     Error(ErrorType),
+    DownloadFinish(Playlist),
+    DownloadProgress(Playlist, u64, u64), // #downloaded / #total
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -64,18 +66,18 @@ pub enum Attr {
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Request {
-    pub client: String,
+    pub client: Arc<str>,
     pub ty: RequestType,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Answer {
-    pub client: String,
+    pub client: Arc<str>,
     pub data: AnswerType,
 }
 
 impl Answer {
-    pub fn new(client: String, data: AnswerType) -> Self {
+    pub fn new(client: Arc<str>, data: AnswerType) -> Self {
         Answer { client, data }
     }
 }

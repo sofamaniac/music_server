@@ -1,19 +1,24 @@
+use std::sync::Arc;
+
 use libmpv::{FileState, Mpv};
 use music_server::source_types::Song;
+
+use crate::app::Route;
 
 pub struct Player {
     player: Mpv,
     shuffled: bool,
     in_playlist: bool,
     stopped: bool,
+    pub route: Route
 }
 
 pub struct State {
     pub duration: i64, // in secs
     pub time_pos: i64, // in secs
     pub volume: i64,
-    pub title: String,
-    pub path: String,
+    pub title: Arc<str>,
+    pub path: Arc<str>,
 }
 
 impl Player {
@@ -26,6 +31,7 @@ impl Player {
             shuffled: false,
             in_playlist: false,
             stopped: true,
+            route: Default::default()
         }
     }
 
@@ -33,14 +39,14 @@ impl Player {
         let duration = self.player.get_property("duration").unwrap_or_default();
         let time_pos = self.player.get_property("time-pos").unwrap_or_default();
         let volume = self.player.get_property("volume").unwrap_or_default();
-        let title = self.player.get_property("media-title").unwrap_or_default();
-        let path = self.player.get_property("path").unwrap_or_default();
+        let title: String = self.player.get_property("media-title").unwrap_or_default();
+        let path: String = self.player.get_property("path").unwrap_or_default();
         State {
             duration,
             time_pos,
             volume,
-            title,
-            path
+            title: Arc::from(title),
+            path: Arc::from(path)
         }
     }
 
@@ -56,12 +62,13 @@ impl Player {
         }
     }
 
-    pub fn play(&mut self, url: &str) {
+    pub fn play(&mut self, url: &str, route: Route) {
         // It is necessary to surround the url with quotes to avoid errors
         match self.player.command("loadfile", &[&format!("\"{}\"", url)]) {
             Ok(_) => self.stopped = false,
             Err(e) => eprintln!("error {:?}", e),
         };
+        self.route = route;
     }
 
     pub fn get_volume(&self) -> i64 {
@@ -87,7 +94,8 @@ impl Player {
         self.shuffled = !self.shuffled;
     }
 
-    pub fn set_auto(&mut self, playlist: &[&str]) {
+    pub fn set_auto(&mut self, playlist: &[&str], route: Route) {
+        self.stop();
         self.player.playlist_clear().unwrap();
         if !self.in_playlist {
             let files: Vec<(&str, FileState, Option<_>)> = playlist
@@ -99,6 +107,7 @@ impl Player {
             self.stopped = false;
         }
         self.in_playlist = !self.in_playlist;
+        self.route = route
     }
 
     pub fn next(&self) {

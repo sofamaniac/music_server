@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
+use std::sync::Arc;
 use std::time::Duration;
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub enum SourceError {
@@ -12,12 +13,12 @@ impl fmt::Display for SourceError {
     }
 }
 
-#[derive(Serialize, Clone, Debug, Deserialize, Default)]
+#[derive(Serialize, Clone, Debug, Deserialize)]
 pub struct Song {
-    pub title: String,
-    pub artists: Vec<String>,
+    pub title: Arc<str>,
+    pub artists: Arc<[String]>,
     pub tags: Vec<String>,
-    pub id: String,
+    pub id: Arc<str>,
     pub duration: Duration,
     pub url: String,
     pub downloaded: bool,
@@ -25,10 +26,10 @@ pub struct Song {
 
 impl Song {
     pub fn new(
-        title: String,
-        artists: Vec<String>,
+        title: Arc<str>,
+        artists: Arc<[String]>,
         tags: Vec<String>,
-        id: String,
+        id: Arc<str>,
         duration: Duration,
         url: String,
     ) -> Self {
@@ -44,10 +45,34 @@ impl Song {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+impl Default for Song {
+    fn default() -> Self {
+        Song::new(
+            "".into(),
+            Arc::new(["".to_owned(); 0]),
+            vec![],
+            "".into(),
+            Default::default(),
+            Default::default(),
+        )
+    }
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Playlist {
-    pub title: String,
+    pub title: Arc<str>,
     pub tags: Vec<String>,
-    pub id: String,
+    pub id: Arc<str>,
     pub size: u32,
+}
+
+impl Default for Playlist {
+    fn default() -> Self {
+        Playlist {
+            title: "".into(),
+            tags: vec![],
+            id: "".into(),
+            size: 0,
+        }
+    }
 }

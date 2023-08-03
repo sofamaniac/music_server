@@ -49,26 +49,57 @@ pub enum Direction {
     DownPanel,
 }
 
-#[derive(Debug)]
-struct Route {
+#[derive(Debug, Default)]
+pub struct Route {
     source: Option<usize>,
     playlist: Option<usize>,
     song: Option<usize>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub struct SourceWidget {
     state: ListState,
     playlist: Vec<PlaylistWidget>,
-    pub name: String,
+    pub name: Arc<str>,
+}
+
+impl Default for SourceWidget {
+    fn default() -> Self {
+        SourceWidget {
+            state: Default::default(),
+            playlist: Default::default(),
+            name: "".into(),
+        }
+    }
 }
 
 #[derive(Default, Clone)]
+pub enum PlaylistStatus {
+    Downloading(u64, u64),
+    Downloaded,
+    #[default]
+    NotDownloaded,
+}
+
+#[derive(Clone)]
 pub struct PlaylistWidget {
     state: ListState,
     playlist: Playlist,
-    pub name: String,
-    songs: Vec<Song>,
+    pub name: Arc<str>,
+    songs: Arc<[Song]>,
+    status: PlaylistStatus,
+}
+
+impl Default for PlaylistWidget {
+    fn default() -> Self {
+        PlaylistWidget {
+            state: Default::default(),
+            playlist: Default::default(),
+            name: "".into(),
+            songs: Arc::new([]),
+            status: Default::default(),
+        }
+    }
 }
 
 impl PlaylistWidget {
@@ -77,17 +108,28 @@ impl PlaylistWidget {
             state: Default::default(),
             playlist: playlist.clone(),
             name: playlist.title,
-            songs: Default::default(),
+            songs: Arc::new([]),
+            status: Default::default(),
         }
     }
 
-    fn add_songs(&mut self, songs: Vec<Song>) {
+    fn add_songs(&mut self, songs: Arc<[Song]>) {
         self.songs = songs;
+    }
+
+    pub fn get_display(&self) -> String {
+        match self.status {
+            PlaylistStatus::Downloaded => format!("✓ {}", self.name),
+            PlaylistStatus::NotDownloaded => format!("  {}", self.name),
+            PlaylistStatus::Downloading(cur, total) => {
+                format!("↓ {} ({}/{})", self.name, cur, total)
+            }
+        }
     }
 }
 
 impl SourceWidget {
-    pub fn new(name: String) -> Self {
+    pub fn new(name: Arc<str>) -> Self {
         SourceWidget {
             state: Default::default(),
             playlist: Default::default(),
@@ -99,7 +141,7 @@ impl SourceWidget {
             self.playlist
                 .iter()
                 .cloned()
-                .map(|p| ListItem::new(p.name))
+                .map(|p| ListItem::new(p.get_display()))
                 .collect(),
             "Playlists",
         )
@@ -161,7 +203,35 @@ impl App {
                     self.load_playlist(answer.client.clone(), p).await;
                 }
             }
-            AnswerType::Songs(playlist, songs) => self.add_songs(answer.client, playlist, songs),
+            AnswerType::Songs(playlist, songs) => {
+                self.add_songs(answer.client, playlist, Arc::from_iter(songs.into_iter()))
+            }
+            AnswerType::DownloadProgress(playlist, curr, total) => {
+                let source = self
+                    .sources
+                    .iter_mut()
+                    .find(|s| s.name == answer.client)
+                    .unwrap();
+                let playlist = source
+                    .playlist
+                    .iter_mut()
+                    .find(|p| p.playlist.id == playlist.id)
+                    .unwrap();
+                playlist.status = PlaylistStatus::Downloading(curr, total);
+            }
+            AnswerType::DownloadFinish(playlist) => {
+                let source = self
+                    .sources
+                    .iter_mut()
+                    .find(|s| s.name == answer.client)
+                    .unwrap();
+                let playlist = source
+                    .playlist
+                    .iter_mut()
+                    .find(|p| p.playlist.id == playlist.id)
+                    .unwrap();
+                playlist.status = PlaylistStatus::Downloaded;
+            }
             _ => (),
         }
     }
@@ -176,7 +246,7 @@ impl App {
         };
     }
 
-    pub async fn add_source(&mut self, source: String) {
+    pub async fn add_source(&mut self, source: Arc<str>) {
         self.sources.push(SourceWidget::new(source.clone()));
         if self.state.selected().is_none() {
             self.state.select(Some(0));
@@ -190,7 +260,7 @@ impl App {
 
     pub async fn request_sources(&self) {
         let request = Request {
-            client: "all".to_owned(),
+            client: "all".into(),
             ty: RequestType::GetAll(ObjRequest::ClientList),
         };
         self.send_request(&request).await;
@@ -201,7 +271,7 @@ impl App {
             .sources
             .iter()
             .cloned()
-            .map(|s| ListItem::new(s.name))
+            .map(|s| ListItem::new::<String>(s.name.to_string()))
             .collect();
         make_list(sources, "Sources")
     }
@@ -248,7 +318,7 @@ impl App {
         }
     }
 
-    pub async fn load_playlist(&mut self, client: String, playlist: Playlist) {
+    pub async fn load_playlist(&mut self, client: Arc<str>, playlist: Playlist) {
         let request = Request {
             client: client.clone(),
             ty: RequestType::GetAll(ObjRequest::Playlist(playlist.id.clone())),
@@ -256,7 +326,7 @@ impl App {
         self.send_request(&request).await;
     }
 
-    fn add_playlist_list(&mut self, client: String, playlistlist: Vec<Playlist>) {
+    fn add_playlist_list(&mut self, client: Arc<str>, playlistlist: Vec<Playlist>) {
         let source: &mut SourceWidget = self.sources.iter_mut().find(|s| s.name == client).unwrap();
         source.add_playlistlist(playlistlist);
     }
@@ -276,7 +346,7 @@ impl App {
             if let Some(p) = route.playlist {
                 if let Some(c) = route.song {
                     let song = &self.sources[s].playlist[p].songs[c];
-                    self.player.play(&song.url);
+                    self.player.play(&song.url, route);
                 }
             }
         }
@@ -307,8 +377,15 @@ impl App {
         let route = self.get_current_route();
         if let Some(p) = route.playlist {
             let source_name = self.sources[route.source.unwrap()].name.clone();
-            let playlist_id = self.sources[route.source.unwrap()].playlist[p].playlist.id.clone();
-            self.send_request(&Request {client: source_name, ty: RequestType::Download(ObjRequest::Playlist(playlist_id))}).await;
+            let playlist_id = self.sources[route.source.unwrap()].playlist[p]
+                .playlist
+                .id
+                .clone();
+            self.send_request(&Request {
+                client: source_name,
+                ty: RequestType::Download(ObjRequest::Playlist(playlist_id)),
+            })
+            .await;
         }
     }
 
@@ -324,7 +401,7 @@ impl App {
         }
     }
 
-    fn add_songs(&mut self, client: String, playlist: Playlist, songs: Vec<Song>) {
+    fn add_songs(&mut self, client: Arc<str>, playlist: Playlist, songs: Arc<[Song]>) {
         let source: &mut SourceWidget = self.sources.iter_mut().find(|s| s.name == client).unwrap();
         let playlist = source
             .playlist
@@ -342,7 +419,7 @@ impl App {
                 let items = playlist
                     .songs
                     .iter()
-                    .map(|s| ListItem::new(s.title.clone()))
+                    .map(|s| ListItem::new(&*s.title))
                     .collect();
                 make_list(items, "Songs")
             } else {
@@ -405,21 +482,27 @@ impl App {
         }
     }
 
-    pub fn get_playing_song_info(&self) -> Song {
+    pub fn get_playing_song_info(&self) -> Option<&Song> {
+        let route = &self.player.route;
         let state = self.player.get_state();
-        let parts: Vec<&str> = state.path.split('/').collect();
-        if parts.len() < 3 {
-            return Default::default()
+        if let Some(source) = route.source {
+            if let Some(playlist) = route.playlist {
+                let playlist = &self.sources[source].playlist[playlist];
+                if let Some(song) = playlist
+                    .songs
+                    .iter()
+                    .find(|s| s.title == state.title.clone().into())
+                {
+                    Some(song)
+                } else {
+                    Default::default()
+                }
+            } else {
+                Default::default()
+            }
+        } else {
+            Default::default()
         }
-        let playlist = parts[parts.len() -2];
-        let source = parts[parts.len() -3];
-        if let Some(source) = self.sources.iter().find(|s| s.name == source) {
-            if let Some(playlist) = source.playlist.iter().find(|p| p.name == playlist) {
-                if let Some(song) = playlist.songs.iter().find(|s| s.title == state.title) {
-                    song.clone()
-                } else { Default::default()}
-            } else { Default::default() }
-        } else { Default::default() }
     }
 
     fn auto(&mut self) {
@@ -430,7 +513,7 @@ impl App {
             // a bit ugly, but there seems to be no good solution
             // to convert from Vec<String> to Vec<&str>
             let songs: Vec<&str> = playlist.iter().map(|s| String::as_ref(&s.url)).collect();
-            self.player.set_auto(&songs);
+            self.player.set_auto(&songs, route);
         }
     }
 
@@ -438,7 +521,7 @@ impl App {
         self.player.is_in_playlist()
     }
 
-    pub fn set_auto_val(&mut self, val: bool)  {
+    pub fn set_auto_val(&mut self, val: bool) {
         if val == self.player.is_in_playlist() {
             return;
         } else {
@@ -446,9 +529,9 @@ impl App {
         }
     }
 
-    pub fn set_pause_val(&mut self, val: bool)  {
+    pub fn set_pause_val(&mut self, val: bool) {
         if val == self.player.paused() {
-            return
+            return;
         } else {
             self.player.playpause()
         }

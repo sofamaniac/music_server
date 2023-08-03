@@ -20,3 +20,5 @@ confy = "0.5.1"
 rspotify = "0.11.7"
 rspotify-model = "0.11.7"
 ytd-rs = { version = "0.1.7", features = ["yt-dlp"] }
+reqwest = "0.11.18"
+scraper = "0.17.1"
