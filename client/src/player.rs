@@ -1,16 +1,35 @@
-use std::sync::Arc;
+use std::{fmt::Display, sync::Arc};
 
 use libmpv::{FileState, Mpv};
 use music_server::source_types::Song;
 
 use crate::app::Route;
 
+#[derive(Copy, Debug, Clone)]
+pub enum Repeat {
+    Off,
+    Song,
+    Playlist,
+}
+
+impl Display for Repeat {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let text = match &self {
+            Repeat::Off => "no",
+            Repeat::Song => "song",
+            Repeat::Playlist => "playlist",
+        };
+        write!(f, "{}", text)
+    }
+}
+
 pub struct Player {
     player: Mpv,
     shuffled: bool,
     in_playlist: bool,
     stopped: bool,
-    pub route: Route
+    repeat: Repeat,
+    pub route: Route,
 }
 
 pub struct State {
@@ -19,6 +38,7 @@ pub struct State {
     pub volume: i64,
     pub title: Arc<str>,
     pub path: Arc<str>,
+    pub repeat: Repeat,
 }
 
 impl Player {
@@ -31,7 +51,8 @@ impl Player {
             shuffled: false,
             in_playlist: false,
             stopped: true,
-            route: Default::default()
+            route: Default::default(),
+            repeat: Repeat::Off,
         }
     }
 
@@ -46,7 +67,8 @@ impl Player {
             time_pos,
             volume,
             title: Arc::from(title),
-            path: Arc::from(path)
+            path: Arc::from(path),
+            repeat: self.repeat,
         }
     }
 
@@ -56,9 +78,9 @@ impl Player {
 
     pub fn playpause(&mut self) {
         if self.paused() {
-            self.player.unpause();
+            let _ = self.player.unpause();
         } else {
-            self.player.pause();
+            let _ = self.player.pause();
         }
     }
 
@@ -75,11 +97,15 @@ impl Player {
         self.player.get_property("volume").unwrap()
     }
 
+    pub fn get_repeat(&self) -> Repeat {
+        self.repeat
+    }
+
     pub fn incr_volume(&mut self, dv: i64) {
         let volume = self.get_volume();
         let volume = std::cmp::min(volume + dv, 100);
         let volume = std::cmp::max(volume, 0);
-        self.player.set_property("volume", volume);
+        let _ = self.player.set_property("volume", volume);
     }
 
     pub fn shuffle(&mut self) {
@@ -107,6 +133,7 @@ impl Player {
             self.stopped = false;
         }
         self.in_playlist = !self.in_playlist;
+        self.shuffled = false;
         self.route = route
     }
 
@@ -137,5 +164,23 @@ impl Player {
 
     pub fn seek(&mut self, dt: i64) {
         self.player.seek_forward(dt as f64).unwrap();
+    }
+
+    pub fn cycle_repeat(&mut self) {
+        match self.repeat {
+            Repeat::Off => {
+                self.repeat = Repeat::Song;
+                self.player.set_property("loop-file", "inf");
+            }
+            Repeat::Song => {
+                self.repeat = Repeat::Playlist;
+                self.player.set_property("loop-file", "no");
+                self.player.set_property("loop-playlist", "inf");
+            }
+            Repeat::Playlist => {
+                self.repeat = Repeat::Off;
+                self.player.set_property("loop-playlist", "no");
+            }
+        }
     }
 }

@@ -1,9 +1,7 @@
 #![warn(clippy::unwrap_used)]
 extern crate google_youtube3 as youtube3;
-use music_server::request::{send_request, Answer, AnswerType, Request};
-use tokio::sync::broadcast::error::RecvError;
-use super::{Song, SongTrait};
 use super::{Playlist, Source, SourceError, SourceResult};
+use super::{Song, SongTrait};
 use crate::utils::parse_duration;
 use crate::{db, utils};
 use async_trait::async_trait;
@@ -11,10 +9,12 @@ use futures::stream::StreamExt;
 use google_youtube3::hyper::client::HttpConnector;
 use google_youtube3::hyper_rustls::HttpsConnector;
 use google_youtube3::oauth2::authenticator_delegate::InstalledFlowDelegate;
+use music_server::request::{send_request, Answer, AnswerType, Request};
 use std::default::Default;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::Sender;
 use youtube3::api::Playlist as YtPlaylist;
@@ -70,7 +70,16 @@ pub struct YoutubePlaylist {
 
 impl Default for YoutubePlaylist {
     fn default() -> Self {
-        YoutubePlaylist { id: "".into(), source: "".into(), .. Default::default() }
+        YoutubePlaylist {
+            id: "".into(),
+            source: "".into(),
+            playlist: Default::default(),
+            songs: Default::default(),
+            next_page_token: Default::default(),
+            etag: Default::default(),
+            hub: Default::default(),
+            is_loaded: Default::default(),
+        }
     }
 }
 
@@ -194,21 +203,24 @@ impl YoutubePlaylist {
 
 #[async_trait]
 impl PlaylistTrait<YoutubeSong> for YoutubePlaylist {
+    fn to_playlist(&self) -> Playlist {
+        self.playlist.clone()
+    }
+
     fn get_id(&self) -> Arc<str> {
         self.id.clone()
     }
-
     fn get_source(&self) -> Arc<str> {
         self.source.clone()
+    }
+    fn get_title(&self) -> Arc<str> {
+        self.playlist.title.clone()
     }
     async fn get_songs(&mut self) -> Vec<YoutubeSong> {
         if !self.is_fully_loaded() {
             self.load_all().await
         };
         self.songs.clone()
-    }
-    fn to_playlist(&self) -> Playlist {
-        self.playlist.clone()
     }
 }
 
@@ -328,8 +340,8 @@ impl Client {
 
                 convert_playlist_list(result, &self.hub)
                     .into_iter()
-                    .next()
-                    .unwrap()
+                    .next() // get the first item
+                    .unwrap_or_default()
             }
         }
     }
@@ -398,7 +410,7 @@ impl Source<YoutubeSong, YoutubePlaylist> for Client {
     fn get_name(&self) -> Arc<str> {
         self.name.clone()
     }
-    async fn get_all_playlists(&mut self) -> std::vec::Vec<Playlist> {
+    async fn get_all_playlists(&mut self) -> Vec<Playlist> {
         self.load_all_playlists().await
     }
 
@@ -413,8 +425,8 @@ impl Source<YoutubeSong, YoutubePlaylist> for Client {
                 Ok(msg) => self.handle_request(msg).await,
                 Err(RecvError::Closed) => {
                     break;
-                },
-                _ => continue
+                }
+                _ => continue,
             };
         }
     }
@@ -428,11 +440,12 @@ impl Source<YoutubeSong, YoutubePlaylist> for Client {
         self.get_all_playlists().await;
     }
 
-    async fn download_songs(&self, songs: &[YoutubeSong], playlist: Playlist) {
-        let songs = songs.to_vec();
+    async fn download_songs(&self, songs: Vec<YoutubeSong>, playlist: YoutubePlaylist) {
         let name = self.name.clone();
         let out_channel = self.out_channel.clone();
-        tokio::spawn(async move { utils::download_yt_playlist(&songs, name, &playlist, out_channel).await });
+        tokio::spawn(async move {
+            utils::download_yt_playlist(&songs, name, playlist, out_channel).await
+        });
     }
 
     async fn get_playlist_by_id(&mut self, id: &str) -> SourceResult<YoutubePlaylist> {
@@ -479,10 +492,10 @@ async fn present_user_url(
     out: Sender<Answer>,
 ) -> Result<String, String> {
     let url_message = format!(
-            "Please direct your browser to {} and follow the instructions displayed \
+        "Please direct your browser to {} and follow the instructions displayed \
              there.",
-            url
-        );
+        url
+    );
     let message: &str = if need_code {
         "Inputting code to authenticate not supported"
     } else {

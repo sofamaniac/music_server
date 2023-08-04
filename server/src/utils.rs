@@ -11,7 +11,11 @@ use ytd_rs::{Arg, YoutubeDL};
 
 use crate::{
     config, db, lastfm,
-    source::{self, spotify::SpotifySong, youtube::YoutubeSong, Song, SongTrait},
+    source::{
+        spotify::{SpotifyPlaylist, SpotifySong},
+        youtube::{YoutubePlaylist, YoutubeSong},
+        PlaylistTrait, SongTrait,
+    },
 };
 pub type UtilsResult<T> = Result<T, UtilsError>;
 
@@ -86,14 +90,26 @@ async fn download_song<T: SongTrait>(
     mut song: T,
     client: Arc<str>,
     playlist_title: Arc<str>,
-    args: Vec<Arg>,
+    args: &[Arg],
     link: String,
 ) -> UtilsResult<T> {
     let config = config::get_config();
+    let out_template = &config.yt_dlp_output_template;
     let folder: String = config.data_location + &format!("/music/{}/{}/", client, playlist_title);
     let folder = PathBuf::from(folder);
     println!("Downloading {}", song.get_title());
-    let ytdlp = YoutubeDL::new(&folder, args, &link).unwrap();
+    let mut base_args = vec![
+        Arg::new("--quiet"),
+        Arg::new("--extract-audio"),
+        Arg::new("--embed-metadata"),
+        Arg::new("--embed-thumbnail"),
+        Arg::new("--add-metadata"),
+        Arg::new_with_arg("--output", out_template),
+        Arg::new_with_arg("--print", "after_move:filepath"),
+        Arg::new_with_arg("--sponsorblock-remove", "all"),
+    ];
+    base_args.extend_from_slice(args);
+    let ytdlp = YoutubeDL::new(&folder, base_args, &link).unwrap();
     let result = tokio::task::spawn_blocking(move || ytdlp.download())
         .await
         .unwrap();
@@ -118,26 +134,21 @@ pub async fn download_yt_song(
 ) -> UtilsResult<YoutubeSong> {
     let config = config::get_config();
     let out_template = &config.yt_dlp_output_template;
-    let args = vec![
-        Arg::new("--quiet"),
-        Arg::new("--extract-audio"),
-        //Arg::new("--embed-metadata"),
-        Arg::new("--embed-thumbnail"),
-        Arg::new("--add-metadata"),
-        Arg::new_with_arg("--output", out_template),
-        Arg::new_with_arg("--print", "after_move:filepath"),
-    ];
     let link = format!("https://youtube.com/watch?v={}", song.get_id());
-    download_song(song, client, playlist_title, args, link).await
+    download_song(song, client, playlist_title, &[], link).await
 }
 
 async fn get_song_title(song: &SpotifySong) -> String {
     match &song.isrc {
-        Some(isrc) => { //format!("https://music.youtube.com/search?q={}+{}#Songs", title, isrc),
-        let title = song.get_title().to_string();
-        let artists = &song.get_artists().join(" ");
-        let url = Url::parse_with_params("https://youtube.com/search?", [("q", title + " " + artists)]);
-        url.unwrap().as_str().to_string()
+        Some(isrc) => {
+            //format!("https://music.youtube.com/search?q={}+{}#Songs", title, isrc),
+            let title = song.get_title().to_string();
+            let artists = &song.get_artists().join(" ");
+            let url = Url::parse_with_params(
+                "https://youtube.com/search?",
+                [("q", title + " " + artists)],
+            );
+            url.unwrap().as_str().to_string()
         }
         None => {
             match lastfm::find_youtube_link(
@@ -165,37 +176,30 @@ pub async fn download_spotify_song(
     let config = config::get_config();
     let out_template = &config.yt_dlp_output_template;
     let args = vec![
-        Arg::new("--quiet"),
-        Arg::new("--extract-audio"),
-        //Arg::new("--embed-metadata"),
-        Arg::new("--embed-thumbnail"),
-        Arg::new("--add-metadata"),
         Arg::new_with_arg("--default-search", "ytsearch"),
-        Arg::new_with_arg("--output", out_template),
-        Arg::new_with_arg("--print", "after_move:filepath"),
-        Arg::new_with_arg("-I", "1") // only download best result
+        Arg::new_with_arg("-I", "1"), // only download best result
     ];
     let title = get_song_title(&song).await;
     println!("{}", title);
-    download_song(song, client, playlist_title, args, title).await
+    download_song(song, client, playlist_title, &args, title).await
 }
 
-async fn download_playlist<T: SongTrait, F, Fut>(
-    songs: &[T],
+async fn download_playlist<S: SongTrait, P: PlaylistTrait<S>, F, Fut>(
+    songs: &[S],
     client: Arc<str>,
-    playlist: &Playlist,
+    playlist: P,
     downloader: F,
     out_channel: Sender<Answer>,
 ) where
-    F: Fn(T, Arc<str>, Arc<str>) -> Fut,
-    Fut: Future<Output = UtilsResult<T>>,
+    F: Fn(S, Arc<str>, Arc<str>) -> Fut,
+    Fut: Future<Output = UtilsResult<S>>,
 {
     println!("Start Downloading");
     let songs = db::remove_downloaded(&songs, &client).unwrap();
     let total = songs.len() as u64;
     let counter = Arc::new(Mutex::new(0));
-    let title = playlist.title.clone();
-    let songs: Vec<UtilsResult<T>> = futures::stream::iter(songs)
+    let title = playlist.get_title();
+    let songs: Vec<UtilsResult<S>> = futures::stream::iter(songs)
         .map(|song| async {
             let song = downloader(song, client.clone(), title.clone()).await;
             let mut counter = counter.lock().await;
@@ -203,7 +207,7 @@ async fn download_playlist<T: SongTrait, F, Fut>(
             out_channel
                 .send(Answer {
                     client: client.clone(),
-                    data: AnswerType::DownloadProgress(playlist.clone(), *counter, total),
+                    data: AnswerType::DownloadProgress(playlist.to_playlist(), *counter, total),
                 })
                 .await;
             song
@@ -211,12 +215,12 @@ async fn download_playlist<T: SongTrait, F, Fut>(
         .buffer_unordered(4)
         .collect()
         .await;
-    let songs_ok: Vec<T> = songs.into_iter().filter_map(|s| s.ok()).collect();
+    let songs_ok: Vec<S> = songs.into_iter().filter_map(|s| s.ok()).collect();
     let _ = db::update_songs(&songs_ok, &client);
     out_channel
         .send(Answer {
             client: client.clone(),
-            data: AnswerType::DownloadFinish(playlist.clone()),
+            data: AnswerType::DownloadFinish(playlist.to_playlist()),
         })
         .await;
     println!("Done Downloading");
@@ -225,7 +229,7 @@ async fn download_playlist<T: SongTrait, F, Fut>(
 pub async fn download_spotify_playlist(
     songs: &[SpotifySong],
     client: Arc<str>,
-    playlist: &Playlist,
+    playlist: SpotifyPlaylist,
     out_channel: Sender<Answer>,
 ) {
     download_playlist(songs, client, playlist, download_spotify_song, out_channel).await;
@@ -234,7 +238,7 @@ pub async fn download_spotify_playlist(
 pub async fn download_yt_playlist(
     songs: &[YoutubeSong],
     client: Arc<str>,
-    playlist: &Playlist,
+    playlist: YoutubePlaylist,
     out_channel: Sender<Answer>,
 ) {
     download_playlist(songs, client, playlist, download_yt_song, out_channel).await;

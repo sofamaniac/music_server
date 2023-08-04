@@ -38,6 +38,8 @@ pub enum Event {
     Prev,
     SeekForward,
     SeekBackward,
+    GoToCurrent,
+    Repeat,
 }
 
 pub enum Direction {
@@ -161,6 +163,7 @@ pub struct App {
     pub state: ListState,
     pub current_panel: Panel,
     pub player: Player,
+    message: Option<String>,
 }
 
 impl App {
@@ -171,6 +174,7 @@ impl App {
             state: Default::default(),
             current_panel: Panel::Sources,
             player: Player::new(),
+            message: None,
         }
     }
 
@@ -232,7 +236,7 @@ impl App {
                     .unwrap();
                 playlist.status = PlaylistStatus::Downloaded;
             }
-            _ => (),
+            _ => self.message = Some(format!("Message from server :{:?}", answer.data)),
         }
     }
 
@@ -368,6 +372,8 @@ impl App {
             Event::Auto => self.auto(),
             Event::SeekForward => self.player.seek(5),
             Event::SeekBackward => self.player.seek(-5),
+            Event::GoToCurrent => self.go_to_current(),
+            Event::Repeat => self.player.cycle_repeat(),
             _ => (),
         }
         self.move_current_panel(0);
@@ -447,7 +453,7 @@ impl App {
     pub fn get_options_widget(&self) -> List<'_> {
         let items = vec![
             ListItem::new(format!("Auto: {}", self.player.is_in_playlist())),
-            ListItem::new("Repeat"),
+            ListItem::new(format!("Repeat: {}", self.player.get_repeat())),
             ListItem::new(format!("Shuffle: {}", self.player.is_shuffled())),
             ListItem::new(format!("Volume: {}/100", self.player.get_volume())),
         ];
@@ -470,30 +476,24 @@ impl App {
         }
     }
 
-    pub fn get_current_song(&self) -> Song {
+    pub fn get_current_song(&self) -> Option<&Song> {
         let route = self.get_current_route();
         if let Some(song) = route.song {
             let playlist = route.playlist.unwrap();
             let source = route.source.unwrap();
             let song = &self.sources[source].playlist[playlist].songs[song];
-            song.clone()
+            Some(song)
         } else {
             Default::default()
         }
     }
 
     pub fn get_playing_song_info(&self) -> Option<&Song> {
-        let route = &self.player.route;
-        let state = self.player.get_state();
+        let route = self.get_playing_route();
         if let Some(source) = route.source {
             if let Some(playlist) = route.playlist {
-                let playlist = &self.sources[source].playlist[playlist];
-                if let Some(song) = playlist
-                    .songs
-                    .iter()
-                    .find(|s| s.title == state.title.clone().into())
-                {
-                    Some(song)
+                if let Some(song) = route.song {
+                    Some(&self.sources[source].playlist[playlist].songs[song])
                 } else {
                     Default::default()
                 }
@@ -522,19 +522,52 @@ impl App {
     }
 
     pub fn set_auto_val(&mut self, val: bool) {
-        if val == self.player.is_in_playlist() {
-            return;
-        } else {
+        if val != self.player.is_in_playlist() {
             self.auto()
         }
     }
 
     pub fn set_pause_val(&mut self, val: bool) {
-        if val == self.player.paused() {
-            return;
-        } else {
+        if val != self.player.paused() {
             self.player.playpause()
         }
+    }
+
+    fn get_playing_route(&self) -> Route {
+        let route = &self.player.route;
+        let state = self.player.get_state();
+        let mut song_index = None;
+        if let Some(source) = route.source {
+            if let Some(playlist) = route.playlist {
+                let playlist = &self.sources[source].playlist[playlist];
+                for (i, s) in playlist.songs.iter().enumerate() {
+                    if *s.title == *state.title {
+                        song_index = Some(i);
+                        break;
+                    }
+                }
+            }
+        }
+        Route {
+            source: route.source,
+            playlist: route.playlist,
+            song: song_index,
+        }
+    }
+
+    fn go_to_current(&mut self) {
+        let route = self.get_playing_route();
+        if route.song.is_none() {
+            return;
+        };
+        let source = route.source.unwrap();
+        let playlist = route.playlist.unwrap();
+        self.state.select(route.source);
+        self.sources[source].state.select(route.playlist);
+        self.sources[source].playlist[playlist]
+            .state
+            .select(route.song);
+        self.current_panel = Panel::Songs;
     }
 }
 

@@ -5,7 +5,7 @@ use std::path::Path;
 use rusqlite::{Connection, Statement};
 use serde::{Deserialize, Serialize};
 
-use crate::{source::{Playlist, Song, SongTrait}, config};
+use crate::{source::{Playlist, SongTrait}, config};
 
 pub type Result<T> = rusqlite::Result<T>;
 

@@ -27,6 +27,7 @@ pub trait PlaylistTrait<S: SongTrait>: Sync + Send {
     fn to_playlist(&self) -> Playlist;
     fn get_id(&self) -> Arc<str>;
     fn get_source(&self) -> Arc<str>;
+    fn get_title(&self) -> Arc<str>;
     async fn get_songs(&mut self) -> Vec<S>;
     async fn load_from_db(&self) -> Playlist {
         db::load_playlist(&self.get_id(), &self.get_source()).unwrap()
@@ -42,7 +43,7 @@ pub trait Source<S: SongTrait, P: PlaylistTrait<S>>: Sync + Send {
     async fn init(&mut self) -> ();
     async fn send(&self, data: Answer) -> ();
     async fn listen(&mut self) -> ();
-    async fn download_songs(&self, songs: &[S], playlist: Playlist);
+    async fn download_songs(&self, songs: Vec<S>, playlist: P);
 
     async fn send_with_name(&self, data: AnswerType) {
         self.send(Answer::new(self.get_name(), data)).await
@@ -78,7 +79,7 @@ pub trait Source<S: SongTrait, P: PlaylistTrait<S>>: Sync + Send {
                         }
                         Ok(mut playlist) => {
                             let songs = playlist.get_songs().await;
-                            self.download_songs(&songs, playlist.to_playlist())
+                            self.download_songs(songs, playlist)
                                 .await;
                         }
                     }

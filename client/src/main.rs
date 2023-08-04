@@ -144,6 +144,8 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &Arc<Mutex<App>>) 
                     KeyCode::Char('>') => app.handle_event(app::Event::Next).await,
                     KeyCode::Char('a') => app.handle_event(app::Event::Auto).await,
                     KeyCode::Char('y') => app.handle_event(app::Event::Shuffle).await,
+                    KeyCode::Char('g') => app.handle_event(app::Event::GoToCurrent).await,
+                    KeyCode::Char('r') => app.handle_event(app::Event::Repeat).await,
                     KeyCode::Right => app.handle_event(app::Event::SeekForward).await,
                     KeyCode::Left => app.handle_event(app::Event::SeekBackward).await,
                     _ => (),

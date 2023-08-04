@@ -6,14 +6,14 @@ use async_trait::async_trait;
 use futures::TryStreamExt;
 use rspotify::clients::{BaseClient, OAuthClient};
 use rspotify::model::{PlayableItem, PlaylistId, SimplifiedPlaylist};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::{config, db, utils};
 use music_server::request::{send_request, Answer, AnswerType, Request, RequestType};
 
-use super::{Song, SongTrait};
 use super::{Playlist, PlaylistTrait, Source, SourceError, SourceResult};
+use super::{Song, SongTrait};
 use rspotify::{self, AuthCodeSpotify};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{self, Sender};
@@ -71,7 +71,15 @@ pub struct SpotifyPlaylist {
 
 impl Default for SpotifyPlaylist {
     fn default() -> Self {
-        SpotifyPlaylist { id: "".into(),..Default::default() }
+        SpotifyPlaylist {
+            id: "".into(),
+            source: "".into(),
+            playlist: Default::default(),
+            songs: Default::default(),
+            etag: Default::default(),
+            is_loaded: Default::default(),
+            client: Default::default(),
+        }
     }
 }
 
@@ -83,26 +91,31 @@ async fn load_all_songs(client: &AuthCodeSpotify, id: PlaylistId<'_>) -> Vec<Spo
             break;
         }
         let items = page.unwrap_or_default();
-        let tracks = items.track.unwrap();
+        let tracks = match items.track {
+            Some(track) => track,
+            None => continue
+        };
         match tracks {
             PlayableItem::Episode(_) => (),
             PlayableItem::Track(fulltrack) => songs.push(SpotifySong {
-                song: Song::new(fulltrack.name.into(),
-                fulltrack
-                    .artists
-                    .iter()
-                    .cloned()
-                    .map(|artist| artist.name)
-                    .collect(),
-                Default::default(),
-                if fulltrack.id.is_some() {
-                    fulltrack.id.unwrap().to_string().into()
-                } else {
-                    "".into()
-                },
-                fulltrack.duration.to_std().unwrap(),
-                Default::default(),),
-                isrc: fulltrack.external_ids.get("isrc").cloned()
+                song: Song::new(
+                    fulltrack.name.into(),
+                    fulltrack
+                        .artists
+                        .iter()
+                        .cloned()
+                        .map(|artist| artist.name)
+                        .collect(),
+                    Default::default(),
+                    if fulltrack.id.is_some() {
+                        fulltrack.id.unwrap().to_string().into()
+                    } else {
+                        "".into()
+                    },
+                    fulltrack.duration.to_std().unwrap(),
+                    Default::default(),
+                ),
+                isrc: fulltrack.external_ids.get("isrc").cloned(),
             }),
         }
     }
@@ -152,6 +165,10 @@ impl SpotifyPlaylist {
 
 #[async_trait]
 impl PlaylistTrait<SpotifySong> for SpotifyPlaylist {
+    fn to_playlist(&self) -> Playlist {
+        self.playlist.clone()
+    }
+
     fn get_id(&self) -> Arc<str> {
         self.id.clone()
     }
@@ -160,15 +177,15 @@ impl PlaylistTrait<SpotifySong> for SpotifyPlaylist {
         self.source.clone()
     }
 
+    fn get_title(&self) -> Arc<str> {
+        self.playlist.title.clone()
+    }
+     
     async fn get_songs(&mut self) -> Vec<SpotifySong> {
         if !self.is_loaded {
             self.load_all().await
         };
         self.songs.clone()
-    }
-
-    fn to_playlist(&self) -> Playlist {
-        self.playlist.clone()
     }
 }
 
@@ -246,8 +263,8 @@ impl Client {
                 }
                 Err(RecvError::Closed) => {
                     break;
-                },
-                _ => continue
+                }
+                _ => continue,
             };
         }
     }
@@ -361,17 +378,16 @@ impl Source<SpotifySong, SpotifyPlaylist> for Client {
                 Ok(msg) => self.handle_request(msg).await,
                 Err(RecvError::Closed) => {
                     break;
-                },
-                _ => continue
+                }
+                _ => continue,
             };
         }
     }
-    async fn download_songs(&self, songs: &[SpotifySong], playlist: Playlist) {
-        let songs = songs.to_vec();
+    async fn download_songs(&self, songs: Vec<SpotifySong>, playlist: SpotifyPlaylist) {
         let name = self.name.clone();
         let out_channel = self.out_channel.clone();
-        tokio::spawn(
-            async move { utils::download_spotify_playlist(&songs, name, &playlist, out_channel).await },
-        );
+        tokio::spawn(async move {
+            utils::download_spotify_playlist(&songs, name, playlist, out_channel).await
+        });
     }
 }
