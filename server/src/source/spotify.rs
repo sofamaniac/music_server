@@ -18,6 +18,8 @@ use rspotify::{self, AuthCodeSpotify};
 use tokio::sync::broadcast::Receiver;
 use tokio::sync::mpsc::{self, Sender};
 
+use log::*;
+
 const MAX_RESULT: u32 = 50;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -281,7 +283,7 @@ impl Client {
                     // Ensure that we actually got a token from the refetch
                     let token = self.client.refetch_token().await;
                     match token {
-                        Err(err) => println!("Error: {}", err),
+                        Err(err) => error!("Error: {}", err),
                         Ok(val) => match val {
                             Some(refreshed_token) => {
                                 *self.client.get_token().lock().await.unwrap() =
@@ -297,14 +299,14 @@ impl Client {
             }
             // Otherwise following the usual procedure to get the token.
             _ => {
-                println!("no token found");
+                warn!("no token found");
                 self.reauth().await;
             }
         }
 
         match self.client.write_token_cache().await {
             Ok(_) => (),
-            Err(e) => println!("{}", e),
+            Err(e) => error!("{}", e),
         }
     }
 
@@ -372,7 +374,7 @@ impl Source<SpotifySong, SpotifyPlaylist> for Client {
         self.get_all_playlists().await;
     }
     async fn listen(&mut self) {
-        println!("Start listening");
+        info!("Start listening");
         loop {
             let _ = match self.in_channel.recv().await {
                 Ok(msg) => self.handle_request(msg).await,
@@ -387,7 +389,7 @@ impl Source<SpotifySong, SpotifyPlaylist> for Client {
         let name = self.name.clone();
         let out_channel = self.out_channel.clone();
         tokio::spawn(async move {
-            utils::download_spotify_playlist(&songs, name, playlist, out_channel).await
+            utils::spotify_downloader::download(&songs, name, playlist, out_channel).await
         });
     }
 }

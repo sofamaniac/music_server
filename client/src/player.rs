@@ -1,7 +1,6 @@
 use std::{fmt::Display, sync::Arc};
 
 use libmpv::{FileState, Mpv};
-use music_server::source_types::Song;
 
 use crate::app::Route;
 
@@ -162,8 +161,15 @@ impl Player {
         self.stopped
     }
 
-    pub fn seek(&mut self, dt: i64) {
+    pub fn seek_relative(&mut self, dt: i64) {
         self.player.seek_forward(dt as f64).unwrap();
+    }
+
+    pub fn seek_percent(&mut self, percent: usize) {
+        // seek_percent_absolute is the same as seek_percent
+        // because of a typo in the lib
+        // self.player.seek_percent_absolute(pct).unwrap();
+        self.player.command("seek", &[&format!("{}", percent), "absolute-percent"]).unwrap();
     }
 
     pub fn cycle_repeat(&mut self) {

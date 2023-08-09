@@ -22,3 +22,6 @@ rspotify-model = "0.11.7"
 ytd-rs = { version = "0.1.7", features = ["yt-dlp"] }
 reqwest = "0.11.18"
 scraper = "0.17.1"
+deezer = {path="../deezer-rs"}
+log = "0.4.19"
+env_logger = "0.10.0"

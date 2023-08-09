@@ -20,6 +20,7 @@ use tokio::sync::mpsc::Sender;
 use youtube3::api::Playlist as YtPlaylist;
 use youtube3::api::{PlaylistItem, PlaylistListResponse};
 use youtube3::{hyper, hyper_rustls, oauth2, YouTube};
+use log::{info, warn, error, debug};
 
 use super::PlaylistTrait;
 use crate::config;
@@ -167,7 +168,7 @@ impl YoutubePlaylist {
             return;
         };
         loop {
-            println!("Loading Page {}", self.playlist.title);
+            debug!("Loading Page {}", self.playlist.title);
             match self.load_page().await {
                 Some(s) => self.next_page_token = s,
                 None => {
@@ -248,7 +249,7 @@ impl Client {
         let secret = oauth2::read_application_secret(credentials_path).await;
         let secret = match secret {
             Err(e) => {
-                println!("Cannot find credentials for youtube client : {}", e);
+                error!("Cannot find credentials for youtube client : {}", e);
                 return Err(e);
             }
             Ok(secret) => secret,
@@ -419,7 +420,7 @@ impl Source<YoutubeSong, YoutubePlaylist> for Client {
     }
 
     async fn listen(&mut self) {
-        println!("Start listening");
+        info!("Start listening");
         loop {
             let _ = match self.in_channel.recv().await {
                 Ok(msg) => self.handle_request(msg).await,

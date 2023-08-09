@@ -5,6 +5,8 @@ use std::path::Path;
 use rusqlite::{Connection, Statement};
 use serde::{Deserialize, Serialize};
 
+use log::*;
+
 use crate::{source::{Playlist, SongTrait}, config};
 
 pub type Result<T> = rusqlite::Result<T>;
@@ -19,7 +21,7 @@ fn prepare<'a>(conn: &'a Connection, query: &str) -> Statement<'a> {
     match stmt {
         Ok(stmt) => stmt,
         Err(err) => {
-            println!("query: {}, err: {}", query, err);
+            error!("query: {}, err: {}", query, err);
             panic!()
         }
     }

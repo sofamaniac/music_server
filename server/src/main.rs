@@ -2,9 +2,9 @@ use std::io;
 
 mod config;
 mod db;
+mod lastfm;
 mod source;
 mod utils;
-mod lastfm;
 
 use crate::source::{spotify, youtube, Source};
 use music_server::request::{self, handle_request, Answer, Request};
@@ -15,8 +15,10 @@ use tokio::runtime::Builder;
 use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
+use log::{debug, error, info, trace, warn};
+
 fn start_server() {
-    println!("Starting server");
+    info!("Starting server");
     let acceptor_runtime = Builder::new_multi_thread()
         .worker_threads(1)
         .thread_name("acceptor-pool")
@@ -77,19 +79,19 @@ async fn stream_read(
         let message = match std::str::from_utf8(&buf) {
             Ok(mes) => mes,
             Err(err) => {
-                println!("Error while reading {}", err);
+                error!("Error while reading {}", err);
                 continue;
             } // TODO inform client
         };
         let request: Request = match handle_request(message.to_owned()).await {
             Ok(req) => req,
             Err(e) => {
-                println!("Error while handling request : {} {}", e, message);
+                error!("Error while handling request : {} {}", e, message);
                 // TODO inform client
                 continue;
             }
         };
-        println!("{:?}", request);
+        info!("{:?}", request);
         broad_tx.send(request);
     }
 }
@@ -142,6 +144,7 @@ async fn stream_handler(stream: TcpStream) -> Result<(), std::io::Error> {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
     db::init().expect("Failed to initialize db");
     start_server();
     Ok(())

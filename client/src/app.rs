@@ -1,54 +1,23 @@
-use std::{
-    sync::{Arc, Mutex},
-    vec,
-};
+use std::{sync::Arc, vec};
 
 use music_server::{
     request::{self, Answer, AnswerType, ObjRequest, Request, RequestType},
     source_types::{Playlist, Song},
 };
-use tokio::{
-    io::WriteHalf,
-    net::{tcp::OwnedWriteHalf, TcpStream},
-};
+use tokio::net::tcp::OwnedWriteHalf;
 use tui::{
     style::{Color, Modifier, Style},
     widgets::{Block, Borders, List, ListItem, ListState},
 };
 
-use crate::player::Player;
+use crate::{event, player::Player};
+use event::Direction;
+use event::Event;
 
 pub enum Panel {
     Sources,
     Playlists,
     Songs,
-}
-
-pub enum Event {
-    Move(Direction),
-    Play,
-    Pause,
-    Stop,
-    Shuffle,
-    VolumeUp,
-    VolumeDown,
-    Download,
-    Auto,
-    Next,
-    Prev,
-    SeekForward,
-    SeekBackward,
-    GoToCurrent,
-    Repeat,
-}
-
-pub enum Direction {
-    Up,
-    Down,
-    RightPanel,
-    LeftPanel,
-    UpPanel,
-    DownPanel,
 }
 
 #[derive(Debug, Default)]
@@ -296,7 +265,7 @@ impl App {
         }
     }
 
-    pub fn set_playlist_state(&mut self, off: i32) {
+    pub fn set_playlist_state(&mut self, off: i64) {
         let route = self.get_current_route();
         if let Some(i) = route.source {
             let source = &mut self.sources[i];
@@ -308,16 +277,14 @@ impl App {
         }
     }
 
-    pub fn set_song_state(&mut self, off: i32) {
+    pub fn set_song_state(&mut self, off: i64) {
         let route = self.get_current_route();
         if let Some(s) = route.source {
             if let Some(p) = route.playlist {
                 let playlist = &mut self.sources[s].playlist[p];
-                playlist.state.select(Some(compute_new_i(
-                    route.song,
-                    off,
-                    playlist.playlist.size as usize,
-                )));
+                playlist
+                    .state
+                    .select(Some(compute_new_i(route.song, off, playlist.songs.len())));
             }
         }
     }
@@ -360,20 +327,22 @@ impl App {
         match event {
             Event::Move(dir) => self.handle_move(dir),
             Event::Play => self.play(),
-            Event::Pause => {
-                self.player.playpause();
-            }
-            Event::VolumeUp => self.player.incr_volume(5),
-            Event::VolumeDown => self.player.incr_volume(-5),
+            Event::Pause => self.player.playpause(),
+            Event::Volume(v) => self.player.incr_volume(v),
             Event::Download => self.download().await,
             Event::Shuffle => self.player.shuffle(),
             Event::Prev => self.player.prev(),
             Event::Next => self.player.next(),
             Event::Auto => self.auto(),
-            Event::SeekForward => self.player.seek(5),
-            Event::SeekBackward => self.player.seek(-5),
+            Event::Seek(event::SeekMode::Relative(s)) => self.player.seek_relative(s),
+            Event::Seek(event::SeekMode::Percent(s)) => self.player.seek_percent(s),
             Event::GoToCurrent => self.go_to_current(),
             Event::Repeat => self.player.cycle_repeat(),
+            Event::Enter => match self.current_panel {
+                Panel::Songs => self.play(),
+                Panel::Sources => self.current_panel = Panel::Playlists,
+                Panel::Playlists => self.current_panel = Panel::Songs,
+            },
             _ => (),
         }
         self.move_current_panel(0);
@@ -395,7 +364,7 @@ impl App {
         }
     }
 
-    pub fn move_current_panel(&mut self, off: i32) {
+    pub fn move_current_panel(&mut self, off: i64) {
         match self.current_panel {
             Panel::Sources => {
                 let index = self.state.selected();
@@ -583,22 +552,16 @@ fn make_list<'a>(items: Vec<ListItem<'a>>, title: &'a str) -> List<'a> {
         )
 }
 
-fn compute_new_i(i: Option<usize>, off: i32, max: usize) -> usize {
+fn clamp(min: i64, max: i64, x: i64) -> i64 {
+    std::cmp::max(min, std::cmp::min(max - 1, x))
+}
+
+fn compute_new_i(i: Option<usize>, off: i64, max: usize) -> usize {
     match i {
-        None => {
-            if off < 0 {
-                0
-            } else {
-                off as usize
-            }
-        }
+        None => clamp(0, max as i64, off) as usize,
         Some(i) => {
-            let res = (i as i32) + off;
-            if res < 0 {
-                0
-            } else {
-                std::cmp::min((i as i32 + off) as usize, max - 1)
-            }
+            let res = (i as i64) + off;
+            clamp(0, max as i64, res) as usize
         }
     }
 }

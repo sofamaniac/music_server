@@ -4,7 +4,8 @@ use std::{sync::Arc, future::pending};
 use tokio::sync::Mutex;
 use zbus::{ConnectionBuilder, dbus_interface};
 
-use crate::app::{App, Event};
+use crate::app::App;
+use crate::event::Event;
 
 struct BaseInterface {
 }

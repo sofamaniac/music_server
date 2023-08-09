@@ -8,6 +8,7 @@ pub struct Config {
     pub yt_dlp_output_template: String,
     pub spotify_id: String,
     pub spotify_secret: String,
+    pub lastfm_api_key: String
 }
 
 impl std::default::Default for Config {
@@ -19,6 +20,7 @@ impl std::default::Default for Config {
             yt_dlp_output_template: "%(title)s.%(ext)s".to_string(),
             spotify_id: "".to_string(),
             spotify_secret: "".to_string(),
+            lastfm_api_key: "".to_string(),
         }
     }
 }

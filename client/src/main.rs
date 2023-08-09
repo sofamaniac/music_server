@@ -1,7 +1,6 @@
 use crossterm::{
-    event::{self, poll, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen}, event::{DisableMouseCapture, EnableMouseCapture},
 };
 use music_server::request::{get_answer, Answer};
 use std::{error::Error, io, sync::Arc, time::Duration};
@@ -9,22 +8,22 @@ use tokio::sync::Mutex;
 use tokio::{
     io::AsyncReadExt,
     net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        tcp::OwnedReadHalf,
         TcpStream,
     },
 };
 use tui::{
     backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::Span,
-    widgets::{Block, BorderType, Borders, Gauge, List, ListState, Paragraph, Wrap},
+    style::{Color, Style},
+    widgets::{Block, BorderType, Borders, Gauge, ListState}, 
     Frame, Terminal,
 };
 
 mod app;
 mod dbus;
 mod player;
+mod event;
 use app::App;
 
 async fn start_ui(app: &Arc<Mutex<App>>) -> Result<(), Box<dyn Error>> {
@@ -104,51 +103,13 @@ async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &Arc<Mutex<App>>) 
         terminal.draw(|f| ui(f, &app, player_state))?;
 
         // avoid to block refresh
-        if poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                match key.code {
-                    KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('j') => {
-                        app.handle_event(app::Event::Move(app::Direction::Down))
-                            .await
+        if crossterm::event::poll(Duration::from_millis(50))? {
+            if let crossterm::event::Event::Key(key) = crossterm::event::read()? {
+                if let Some(event) = event::translate_event(&key) {
+                    if event == event::Event::Quit {
+                        return Ok(())
                     }
-                    KeyCode::Char('J') => {
-                        app.handle_event(app::Event::Move(app::Direction::DownPanel))
-                            .await
-                    }
-                    KeyCode::Char('k') => {
-                        app.handle_event(app::Event::Move(app::Direction::Up)).await
-                    }
-                    KeyCode::Char('K') => {
-                        app.handle_event(app::Event::Move(app::Direction::UpPanel))
-                            .await
-                    }
-                    KeyCode::Char('L') => {
-                        app.handle_event(app::Event::Move(app::Direction::RightPanel))
-                            .await
-                    }
-                    KeyCode::Char('H') => {
-                        app.handle_event(app::Event::Move(app::Direction::LeftPanel))
-                            .await
-                    }
-                    KeyCode::Char(' ') => app.handle_event(app::Event::Pause).await,
-                    KeyCode::Enter => match app.current_panel {
-                        app::Panel::Sources => app.current_panel = app::Panel::Playlists,
-                        app::Panel::Playlists => app.current_panel = app::Panel::Songs,
-                        app::Panel::Songs => app.handle_event(app::Event::Play).await,
-                    },
-                    KeyCode::Char('d') => app.handle_event(app::Event::VolumeDown).await,
-                    KeyCode::Char('f') => app.handle_event(app::Event::VolumeUp).await,
-                    KeyCode::Char('T') => app.handle_event(app::Event::Download).await,
-                    KeyCode::Char('<') => app.handle_event(app::Event::Prev).await,
-                    KeyCode::Char('>') => app.handle_event(app::Event::Next).await,
-                    KeyCode::Char('a') => app.handle_event(app::Event::Auto).await,
-                    KeyCode::Char('y') => app.handle_event(app::Event::Shuffle).await,
-                    KeyCode::Char('g') => app.handle_event(app::Event::GoToCurrent).await,
-                    KeyCode::Char('r') => app.handle_event(app::Event::Repeat).await,
-                    KeyCode::Right => app.handle_event(app::Event::SeekForward).await,
-                    KeyCode::Left => app.handle_event(app::Event::SeekBackward).await,
-                    _ => (),
+                    app.handle_event(event).await;
                 }
             }
         }
